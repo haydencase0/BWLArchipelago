@@ -1,0 +1,30 @@
+# Build output
+bin/
+obj/
+
+# Visual Studio
+.vs/
+*.user
+*.suo
+*.userosscache
+*.sln.docstates
+*.rsuser
+
+# NuGet
+*.nupkg
+packages/
+project.lock.json
+project.nuget.cache
+
+# OS files
+Thumbs.db
+Desktop.ini
+.DS_Store
+
+# BepInEx - don't commit game DLLs you referenced
+# (they're on the user's machine already)
+*.dll
+
+# But DO commit your own built plugin if you want
+# (comment out the line above and be selective instead)
+# !bin/Release/net472/BWLArchipelago.dll

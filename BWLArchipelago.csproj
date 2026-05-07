@@ -1,0 +1,61 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+	<PropertyGroup>
+		<TargetFramework>net472</TargetFramework>
+		<LangVersion>7.3</LangVersion>
+		<Nullable>disable</Nullable>
+		<ImplicitUsings>disable</ImplicitUsings>
+		<CopyLocalLockFileAssemblies>true</CopyLocalLockFileAssemblies>
+	</PropertyGroup>
+
+	<ItemGroup>
+		<PackageReference Include="Archipelago.MultiClient.Net" Version="6.7.1">
+			<PrivateAssets>none</PrivateAssets>
+			<IncludeAssets>all</IncludeAssets>
+		</PackageReference>
+	</ItemGroup>
+
+	<ItemGroup>
+		<Reference Include="0Harmony20">
+			<HintPath>..\..\..\..\Program Files (x86)\Steam\steamapps\common\Before We Leave\BepInEx\core\0Harmony20.dll</HintPath>
+			<Private>False</Private>
+		</Reference>
+
+		<Reference Include="Assembly-CSharp">
+			<HintPath>..\..\..\..\Program Files (x86)\Steam\steamapps\common\Before We Leave\Before We Leave_Data\Managed\Assembly-CSharp.dll</HintPath>
+			<Private>False</Private>
+		</Reference>
+
+		<Reference Include="BepInEx">
+			<HintPath>..\..\..\..\Program Files (x86)\Steam\steamapps\common\Before We Leave\BepInEx\core\BepInEx.dll</HintPath>
+			<Private>False</Private>
+		</Reference>
+
+		<Reference Include="BepInEx.Harmony">
+			<HintPath>..\..\..\..\Program Files (x86)\Steam\steamapps\common\Before We Leave\BepInEx\core\BepInEx.Harmony.dll</HintPath>
+			<Private>False</Private>
+		</Reference>
+
+		<Reference Include="UnityEngine">
+			<HintPath>..\..\..\..\Program Files (x86)\Steam\steamapps\common\Before We Leave\Before We Leave_Data\Managed\UnityEngine.dll</HintPath>
+			<Private>False</Private>
+		</Reference>
+
+		<Reference Include="UnityEngine.CoreModule">
+			<HintPath>..\..\..\..\Program Files (x86)\Steam\steamapps\common\Before We Leave\Before We Leave_Data\Managed\UnityEngine.CoreModule.dll</HintPath>
+			<Private>False</Private>
+		</Reference>
+
+		<Reference Include="MonoMod.RuntimeDetour">
+			<HintPath>..\..\..\..\Program Files (x86)\Steam\steamapps\common\Before We Leave\BepInEx\core\MonoMod.RuntimeDetour.dll</HintPath>
+			<Private>False</Private>
+		</Reference>
+
+		<Reference Include="MonoMod.Utils">
+			<HintPath>..\..\..\..\Program Files (x86)\Steam\steamapps\common\Before We Leave\BepInEx\core\MonoMod.Utils.dll</HintPath>
+			<Private>False</Private>
+		</Reference>
+
+	</ItemGroup>
+
+</Project>

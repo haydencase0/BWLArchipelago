@@ -64,11 +64,13 @@ namespace BWLArchipelago
             Log.LogInfo("Patch applied: StartResearchAction.Execute.");
 
             // --- Patch 2: AddResearchedTechnology ---
-            // Prefix: sets IsCompletingPlayerCheck flag for non-AP calls so
-            // EvaluateAvailableBuildings is skipped during player checks.
-            // Postfix: removes tech from researchedTechnologies so no checkmark
-            // appears from player checks. The original runs fully so library
-            // queue transitions work correctly.
+            // Prefix: sets IsCompletingPlayerCheck for non-AP calls so
+            // EvaluateAvailableBuildings, EvaluateBuildingButtons, and
+            // EvaluateAvailableBuildingCards are all skipped during player checks.
+            // Postfix: removes tech from researchedTechnologies so buildings
+            // don't unlock from player checks. DequeueTechnologyPatch handles
+            // the checkmark. The original runs fully so library queue
+            // transitions work correctly.
             // AP grants pass through unchanged via IsGrantingTechnology flag.
 
             MethodInfo addResearchedTarget = AccessTools.Method(
@@ -98,11 +100,9 @@ namespace BWLArchipelago
             Log.LogInfo("Patch applied: AddResearchedTechnology.");
 
             // --- Patch 3: PlanetIsland.EvaluateAvailableBuildings ---
-            // Skips evaluation entirely during player checks (buildings only
-            // unlock from AP grants).
-            // For all other calls: temporarily adds all granted techs to
-            // researchedTechnologies before evaluation so buildings stay unlocked,
-            // then removes them after.
+            // Skips during player checks so buildings don't unlock.
+            // For all other calls: temporarily adds all granted techs so
+            // buildings unlocked by AP grants stay available.
 
             try
             {
@@ -146,6 +146,9 @@ namespace BWLArchipelago
                 );
             }
 
+            // --- Patch 4: GameCardController.EvaluateBuildingButtons ---
+            // Skips during player checks so building card state doesn't update.
+
             Type cardControllerType = AccessTools.TypeByName("GameCardController");
 
             MethodInfo evalBuildingButtonsTarget = cardControllerType != null
@@ -161,8 +164,13 @@ namespace BWLArchipelago
                         nameof(EvaluateBuildingButtonsPatch.Prefix)
                     )
                 );
-                Log.LogInfo("Patch applied: GameCardController.EvaluateBuildingButtons.");
+                Log.LogInfo(
+                    "Patch applied: GameCardController.EvaluateBuildingButtons."
+                );
             }
+
+            // --- Patch 5: GameCardController.EvaluateAvailableBuildingCards ---
+            // Skips during player checks so building card state doesn't update.
 
             MethodInfo evalBuildingCardsTarget = cardControllerType != null
                 ? AccessTools.Method(
@@ -181,14 +189,16 @@ namespace BWLArchipelago
                         nameof(EvaluateAvailableBuildingCardsPatch.Prefix)
                     )
                 );
-                Log.LogInfo("Patch applied: GameCardController.EvaluateAvailableBuildingCards.");
+                Log.LogInfo(
+                    "Patch applied: GameCardController.EvaluateAvailableBuildingCards."
+                );
             }
 
-            // --- Patch 4: TaskOutputLibrary.Execute ---
+            // --- Patch 6: TaskOutputLibrary.Execute ---
             // Logs library task completion for debugging.
-            // The original handles AddResearchedTechnology and DequeueTechnology.
 
             Type taskOutputLibraryType = AccessTools.TypeByName("TaskOutputLibrary");
+
             MethodInfo taskOutputLibraryTarget = taskOutputLibraryType != null
                 ? AccessTools.Method(taskOutputLibraryType, "Execute")
                 : null;
@@ -209,7 +219,32 @@ namespace BWLArchipelago
                 Log.LogInfo("Patch applied: TaskOutputLibrary.Execute.");
             }
 
-            // --- Patch 5: CancelResearchAction.Execute ---
+            // --- Patch 7: TaskOutputLibrary.IsValid ---
+            // Replaces the prerequisite check with our own so that player-checked
+            // techs (which are removed from researchedTechnologies) still satisfy
+            // prerequisites for downstream research.
+
+            MethodInfo taskOutputLibraryIsValidTarget = taskOutputLibraryType != null
+                ? AccessTools.Method(taskOutputLibraryType, "IsValid")
+                : null;
+
+            if (taskOutputLibraryIsValidTarget == null)
+            {
+                Log.LogError("Could not find TaskOutputLibrary.IsValid.");
+            }
+            else
+            {
+                harmony.Patch(
+                    taskOutputLibraryIsValidTarget,
+                    prefix: new HarmonyMethod(
+                        typeof(TaskOutputLibraryIsValidPatch),
+                        nameof(TaskOutputLibraryIsValidPatch.Prefix)
+                    )
+                );
+                Log.LogInfo("Patch applied: TaskOutputLibrary.IsValid.");
+            }
+
+            // --- Patch 8: CancelResearchAction.Execute ---
             // Removes the tech from queuedResearches when cancelled.
 
             MethodInfo cancelExecuteTarget = AccessTools.Method(
@@ -228,9 +263,9 @@ namespace BWLArchipelago
                 Log.LogInfo("Patch applied: CancelResearchAction.Execute.");
             }
 
-            // --- Patch 6: LibraryComponent.DequeueTechnology ---
-            // Fires when any research leaves the library queue.
-            // Marks the tech as checked and flushes deferred AP grants.
+            // --- Patch 9: LibraryComponent.DequeueTechnology ---
+            // Prefix marks the tech as checked so the checkmark appears.
+            // Postfix flushes deferred AP grants after dequeue fully completes.
 
             MethodInfo dequeueTechTarget = AccessTools.Method(
                 typeof(LibraryComponent), "DequeueTechnology"
@@ -252,9 +287,9 @@ namespace BWLArchipelago
                 Log.LogInfo("Patch applied: LibraryComponent.DequeueTechnology.");
             }
 
-            // --- Patch 7: StartResearchAction.IsValid ---
+            // --- Patch 10: StartResearchAction.IsValid ---
             // Sets IsCheckingResearchValidity and CurrentlyValidatingTech around
-            // the call so HasResearchedTechnologyPatch knows when and what to intercept.
+            // the call so HasResearchedTechnologyPatch can intercept prereq checks.
 
             MethodInfo isValidTarget = AccessTools.Method(
                 typeof(StartResearchAction),
@@ -279,10 +314,10 @@ namespace BWLArchipelago
                 Log.LogInfo("Patch applied: StartResearchAction.IsValid.");
             }
 
-            // --- Patch 8: HasResearchedTechnology ---
+            // --- Patch 11: HasResearchedTechnology ---
             // Only active during StartResearchAction.IsValid.
-            // Returns true for player-checked techs so they satisfy prerequisites.
-            // Steps aside for the tech being validated itself.
+            // Returns true for player-checked techs so they satisfy prerequisites
+            // when the player tries to queue downstream research.
 
             MethodInfo hasResearchedTarget = AccessTools.Method(
                 playerType,
@@ -302,9 +337,8 @@ namespace BWLArchipelago
                 Log.LogInfo("Patch applied: HasResearchedTechnology.");
             }
 
-            // --- Patch 9: TechnologyButton.Update_Internal ---
-            // Shows checkmark for player-checked techs.
-            // Everything else renders normally.
+            // --- Patch 12: TechnologyButton.Update_Internal ---
+            // Shows checkmark for player-checked techs in the tech tree.
 
             MethodInfo updateInternalTarget = AccessTools.Method(
                 typeof(TechnologyButton), "Update_Internal"
@@ -326,7 +360,7 @@ namespace BWLArchipelago
                 Log.LogInfo("Patch applied: TechnologyButton.Update_Internal.");
             }
 
-            // --- Patch 10: TechnologyDetails.Update_Internal ---
+            // --- Patch 13: TechnologyDetails.Update_Internal ---
             // For AP-granted items the player hasn't checked yet:
             // undoes the "done" state and shows the Research button.
 
@@ -350,7 +384,7 @@ namespace BWLArchipelago
                 Log.LogInfo("Patch applied: TechnologyDetails.Update_Internal.");
             }
 
-            // --- Patch 11: ReadyToStartGame ---
+            // --- Patch 14: ReadyToStartGame ---
             // Flushes pending AP grants when the game finishes loading.
 
             MethodInfo readyToStartTarget = AccessTools.Method(
@@ -437,7 +471,8 @@ namespace BWLArchipelago
     }
 
     // Patch 2: Prefix sets IsCompletingPlayerCheck for non-AP calls.
-    // Postfix removes tech from researchedTechnologies after the original runs.
+    // Postfix removes tech from researchedTechnologies after the original runs
+    // so buildings don't unlock from player checks.
     // The original runs fully so library queue transitions work correctly.
     public static class AddResearchedTechnologyPatch
     {
@@ -467,6 +502,26 @@ namespace BWLArchipelago
 
             if (!ArchipelagoManager.IsCompletingPlayerCheck) return;
             ArchipelagoManager.IsCompletingPlayerCheck = false;
+
+            if (technology == null) return;
+
+            // Remove from researchedTechnologies so buildings don't unlock.
+            // DequeueTechnologyPatch handles the checkmark at the right time.
+            // TaskOutputLibraryIsValidPatch handles prerequisites independently.
+            FieldInfo researchedField = AccessTools.Field(
+                __instance.GetType(), "researchedTechnologies"
+            );
+            object researchedSet = researchedField?.GetValue(__instance);
+            if (researchedSet != null)
+            {
+                MethodInfo removeMethod = researchedSet.GetType().GetMethod("Remove");
+                removeMethod?.Invoke(researchedSet, new object[] { technology });
+            }
+
+            BWLArchipelagoPlugin.Log.LogInfo(
+                "Player check completed: " + techName +
+                " - removed from researchedTechnologies."
+            );
         }
 
         internal static string GetName(object technology)
@@ -495,9 +550,9 @@ namespace BWLArchipelago
     }
 
     // Patch 3: Manages granted tech visibility during EvaluateAvailableBuildings.
-    // Skips entirely during player checks.
+    // Skips entirely during player checks so buildings don't unlock.
     // For all other calls: adds all granted techs before evaluation so buildings
-    // stay unlocked, then removes them after so no checkmarks appear.
+    // unlocked by AP grants stay available, then removes them after.
     public static class EvaluateAvailableBuildingsPatch
     {
         public static bool Prefix()
@@ -518,6 +573,7 @@ namespace BWLArchipelago
         }
     }
 
+    // Patch 4: Skips during player checks so building card state doesn't update.
     public static class EvaluateBuildingButtonsPatch
     {
         public static bool Prefix()
@@ -526,6 +582,7 @@ namespace BWLArchipelago
         }
     }
 
+    // Patch 5: Skips during player checks so building card state doesn't update.
     public static class EvaluateAvailableBuildingCardsPatch
     {
         public static bool Prefix()
@@ -534,8 +591,7 @@ namespace BWLArchipelago
         }
     }
 
-    // Patch 4: Logs library task completion.
-    // The original handles AddResearchedTechnology and DequeueTechnology.
+    // Patch 6: Logs library task completion for debugging.
     public static class TaskOutputLibraryPatch
     {
         public static bool Prefix(Entity entity)
@@ -559,7 +615,44 @@ namespace BWLArchipelago
         }
     }
 
-    // Patch 5: Removes the tech from queuedResearches when cancelled.
+    // Patch 7: Replaces TaskOutputLibrary.IsValid prerequisite check.
+    // The original uses HasResearchedTechnology which returns false for
+    // player-checked techs (removed from researchedTechnologies). This patch
+    // checks our own IsTechnologyResearched and IsTechnologyGranted instead
+    // so downstream research tasks start correctly.
+    public static class TaskOutputLibraryIsValidPatch
+    {
+        public static bool Prefix(Entity entity, ref bool __result)
+        {
+            LibraryComponent library = entity?.GetLibrary();
+            if (library == null || library.ResearchingTechnologies.Count == 0)
+            {
+                __result = false;
+                return false;
+            }
+
+            TechnologyDefinition technology = library.ResearchingTechnologies[0];
+
+            if (technology.Prerequsites != null)
+            {
+                foreach (var prereq in technology.Prerequsites)
+                {
+                    string prereqName = prereq.technology.Name;
+                    if (!ArchipelagoManager.IsTechnologyResearched(prereqName) &&
+                        !ArchipelagoManager.IsTechnologyGranted(prereqName))
+                    {
+                        __result = false;
+                        return false;
+                    }
+                }
+            }
+
+            __result = true;
+            return false;
+        }
+    }
+
+    // Patch 8: Removes the tech from queuedResearches when cancelled.
     public static class CancelResearchExecutePatch
     {
         public static void Postfix(CancelResearchAction __instance)
@@ -576,9 +669,8 @@ namespace BWLArchipelago
         }
     }
 
-    // Patch 6: Fires when any research leaves the library queue.
-    // Prefix marks the tech as checked so the checkmark appears.
-    // Postfix flushes deferred AP grants after the dequeue fully completes.
+    // Patch 9: Prefix marks the tech as checked so the checkmark appears.
+    // Postfix flushes deferred AP grants after dequeue fully completes.
     public static class DequeueTechnologyPatch
     {
         public static void Prefix(LibraryComponent __instance, TechnologyDefinition technology)
@@ -604,8 +696,7 @@ namespace BWLArchipelago
             if (ArchipelagoManager.IsGrantingTechnology) return;
             if (!ArchipelagoManager.IsTechnologyResearched(technology.Name)) return;
 
-            // Flush deferred grants now that dequeue has fully completed
-            // and the library is no longer busy with this research.
+            // Flush deferred grants now that dequeue has fully completed.
             ArchipelagoManager.OnGameReady();
 
             BuildingComponent building = __instance.Owner?.GetBuilding();
@@ -618,7 +709,7 @@ namespace BWLArchipelago
         }
     }
 
-    // Patch 7: Sets flags around StartResearchAction.IsValid.
+    // Patch 10: Sets flags around StartResearchAction.IsValid.
     public static class StartResearchIsValidPatch
     {
         public static void Prefix(TechnologyDefinition technology)
@@ -634,8 +725,9 @@ namespace BWLArchipelago
         }
     }
 
-    // Patch 8: Only active during StartResearchAction.IsValid.
-    // Returns true for player-checked techs so they satisfy prerequisites.
+    // Patch 11: Only active during StartResearchAction.IsValid.
+    // Returns true for player-checked techs so they satisfy prerequisites
+    // when the player tries to queue downstream research.
     public static class HasResearchedTechnologyPatch
     {
         public static bool Prefix(
@@ -646,24 +738,17 @@ namespace BWLArchipelago
             if (technology == null)
                 return true;
 
+            if (!ArchipelagoManager.IsCheckingResearchValidity)
+                return true;
+
             string techName = AddResearchedTechnologyPatch.GetName(technology);
             if (techName == null || techName == "<null>")
                 return true;
 
-            // Return true for player-checked techs so prerequisites are satisfied
-            // everywhere - including TaskOutputLibrary.IsValid which checks prereqs
-            // before allowing the library task to start.
-            if (ArchipelagoManager.IsTechnologyResearched(techName))
-            {
-                __result = true;
-                return false;
-            }
+            if (techName == ArchipelagoManager.CurrentlyValidatingTech)
+                return true;
 
-            // Also return true for AP-granted techs during IsValid checks only,
-            // so they satisfy prerequisites for downstream research.
-            if (ArchipelagoManager.IsCheckingResearchValidity &&
-                techName != ArchipelagoManager.CurrentlyValidatingTech &&
-                ArchipelagoManager.IsTechnologyGranted(techName))
+            if (ArchipelagoManager.IsTechnologyResearched(techName))
             {
                 __result = true;
                 return false;
@@ -673,7 +758,7 @@ namespace BWLArchipelago
         }
     }
 
-    // Patch 9: Shows checkmark for player-checked techs in the tech tree.
+    // Patch 12: Shows checkmark for player-checked techs in the tech tree.
     public static class TechnologyButtonUpdatePatch
     {
         public static void Postfix(object __instance)
@@ -744,7 +829,7 @@ namespace BWLArchipelago
         }
     }
 
-    // Patch 10: For AP-granted items the player hasn't checked yet,
+    // Patch 13: For AP-granted items the player hasn't checked yet,
     // undoes the "done" state and shows the Research button in the popup.
     public static class TechnologyDetailsUpdatePatch
     {
@@ -834,7 +919,7 @@ namespace BWLArchipelago
         }
     }
 
-    // Patch 11: Flushes pending AP grants when the game finishes loading.
+    // Patch 14: Flushes pending AP grants when the game finishes loading.
     public static class ReadyToStartGamePatch
     {
         public static void Postfix()

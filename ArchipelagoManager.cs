@@ -30,8 +30,9 @@ namespace BWLArchipelago
         public static bool IsGrantingTechnology = false;
 
         // Set to true while AddResearchedTechnology is running for a player-checked tech.
-        // EvaluateAvailableBuildingsPatch skips building evaluation in this context
-        // so buildings only unlock from AP grants, not from player checks.
+        // EvaluateAvailableBuildings, EvaluateBuildingButtons, and
+        // EvaluateAvailableBuildingCards are all skipped in this context so
+        // buildings only unlock from AP grants, not from player checks.
         public static bool IsCompletingPlayerCheck = false;
 
         // Set to true while StartResearchAction.IsValid is running so

@@ -12,10 +12,10 @@ namespace BWLArchipelago
 {
     public static class ArchipelagoManager
     {
-        // Connection details
-        public static string ServerUrl = "localhost";
+        // Connection details - set by ArchipelagoConnectionUI before Connect() is called
+        public static string ServerUrl = "archipelago.gg";
         public static int ServerPort = 38281;
-        public static string SlotName = "TestPlayer";
+        public static string SlotName = "";
         public static string Password = "";
         public static string GameName = "Before We Leave";
 
@@ -81,11 +81,13 @@ namespace BWLArchipelago
             Log.LogInfo("ArchipelagoManager initialized.");
         }
 
-        public static void Connect()
+        // Connects to the AP server using the current ServerUrl, ServerPort,
+        // SlotName, and Password values. Returns true on success.
+        public static bool Connect()
         {
             Log.LogInfo(
                 "Connecting to Archipelago server: " +
-                ServerUrl + ":" + ServerPort
+                ServerUrl + ":" + ServerPort + " as " + SlotName
             );
 
             session = ArchipelagoSessionFactory.CreateSession(ServerUrl, ServerPort);
@@ -115,6 +117,8 @@ namespace BWLArchipelago
                     foreach (string check in toSend)
                         SendCheckInternal(check);
                 }
+
+                return true;
             }
             else
             {
@@ -122,6 +126,7 @@ namespace BWLArchipelago
                 LoginFailure failure = (LoginFailure)result;
                 foreach (string error in failure.Errors)
                     Log.LogError("Archipelago connection error: " + error);
+                return false;
             }
         }
 
@@ -172,7 +177,6 @@ namespace BWLArchipelago
         }
 
         // Called by DequeueTechnologyPatch when the library finishes a player-queued research.
-        // Marks the tech as checked so the checkmark appears at the right time.
         public static void MarkTechnologyResearched(string techName)
         {
             researchedTechnologies.Add(techName);
@@ -180,35 +184,29 @@ namespace BWLArchipelago
         }
 
         // Called by CancelResearchExecutePatch when the player cancels a research.
-        // Removes from queuedResearches so the player can re-queue it.
         public static void CancelResearch(string techName)
         {
             queuedResearches.Remove(techName);
             Log.LogInfo("Research cancelled, removed from queue: " + techName);
         }
 
-        // Returns true if the player has queued this tech for research.
         public static bool IsResearchQueued(string techName)
         {
             return queuedResearches.Contains(techName);
         }
 
-        // Returns true if the player sent the AP check for this tech.
-        // Drives checkmark display and prerequisite satisfaction.
         public static bool IsTechnologyResearched(string techName)
         {
             return researchedTechnologies.Contains(techName);
         }
 
-        // Returns true if AP has granted this tech to the player.
         public static bool IsTechnologyGranted(string techName)
         {
             return grantedTechnologies.Contains(techName);
         }
 
         // Temporarily adds all granted techs to the game's researchedTechnologies set
-        // so EvaluateAvailableBuildings sees them as researched and keeps buildings unlocked.
-        // Called by EvaluateAvailableBuildingsPatch prefix.
+        // so EvaluateAvailableBuildings sees them and keeps buildings unlocked.
         public static void AddGrantedTechsToResearched()
         {
             object[] context = GetPlayerAndTechManager();
@@ -238,7 +236,6 @@ namespace BWLArchipelago
 
         // Removes all granted techs from the game's researchedTechnologies set
         // after EvaluateAvailableBuildings has run.
-        // Called by EvaluateAvailableBuildingsPatch postfix.
         public static void RemoveGrantedTechsFromResearched()
         {
             object[] context = GetPlayerAndTechManager();
@@ -301,8 +298,7 @@ namespace BWLArchipelago
         }
 
         // Returns true if any library is currently researching a technology.
-        // Used by GrantTechnology to defer grants until research completes
-        // so AddResearchedTechnology doesn't interfere with the library timer.
+        // Used by GrantTechnology to defer grants until research completes.
         private static bool IsAnyLibraryBusy()
         {
             try
@@ -349,7 +345,6 @@ namespace BWLArchipelago
                 if (techName.EndsWith(" Technology"))
                     techName = techName.Substring(0, techName.Length - " Technology".Length);
 
-                // Apply name mapping if one exists for this item
                 if (itemNameToTechName.TryGetValue(techName, out string mappedName))
                 {
                     Log.LogInfo("Mapped '" + techName + "' to '" + mappedName + "'");
@@ -362,7 +357,6 @@ namespace BWLArchipelago
 
         private static void GrantTechnology(string techName)
         {
-            // Deduplicate: skip if already granted
             if (grantedTechnologies.Contains(techName))
             {
                 Log.LogInfo("Already granted, skipping: " + techName);
@@ -389,9 +383,6 @@ namespace BWLArchipelago
                 return;
             }
 
-            // If a library is currently researching, defer this grant until after
-            // the research completes. This prevents AddResearchedTechnology from
-            // calling RemoveResearchingTechnology and interfering with the timer.
             if (IsAnyLibraryBusy())
             {
                 Log.LogInfo("Library busy - deferring grant: " + techName);
@@ -461,17 +452,12 @@ namespace BWLArchipelago
                 return;
             }
 
-            // Mark as granted before invoking so IsTechnologyGranted returns true
-            // during EvaluateAvailableBuildings.
             grantedTechnologies.Add(techName);
 
             IsGrantingTechnology = true;
             addResearched.Invoke(player, new object[] { techDef, null, false });
             IsGrantingTechnology = false;
 
-            // Remove the newly granted tech so no checkmark appears.
-            // EvaluateAvailableBuildingsPatch handles adding all granted techs
-            // during EvaluateAvailableBuildings calls so buildings stay unlocked.
             MethodInfo removeSelf = researchedSet.GetType().GetMethod("Remove");
             object wasRemoved = removeSelf?.Invoke(researchedSet, new object[] { techDef });
             Log.LogInfo("Remove result for " + techName + ": " + wasRemoved);

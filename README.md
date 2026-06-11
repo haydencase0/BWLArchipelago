@@ -121,10 +121,36 @@ The following technologies are grouped into progressive chains. You must receive
 
 ## Building From Source
 
+Building From Source
+
+Prerequisites
+
+
+Visual Studio 2022 or JetBrains Rider
+.NET Framework 4.7.2
+Before We Leave installed via Steam
+BepInEx 5.4.x installed in the Before We Leave game folder
+
+
+Steps
+
+
 1. Clone this repository.
-2. Open `BWLArchipelago.csproj` in Visual Studio or Rider.
-3. Update the reference paths in the `.csproj` file to point to your local BepInEx and Before We Leave managed DLL folders.
-4. Build in Release configuration. The output DLL will be in `bin/Release`.
+2. Open BWLArchipelago.csproj in your IDE.
+3. The project uses NuGet for Archipelago.MultiClient.Net (version 6.7.1) — NuGet should restore this automatically on build.
+4. Update the HintPath values in the .csproj file if your Steam library is not at the default location (C:\Program Files(x86)\Steam\steamapps\common\Before We Leave). The following references point to local DLLs:
+   - 0Harmony20.dll — from BepInEx\core\
+   - Assembly-CSharp.dll — from Before We Leave_Data\Managed\
+   - BepInEx.dll — from BepInEx\core\
+   - BepInEx.Harmony.dll — from BepInEx\core\
+   - UnityEngine.dll — from Before We Leave_Data\Managed\
+   - UnityEngine.CoreModule.dll — from Before We Leave_Data\Managed\
+   - UnityEngine.IMGUIModule.dll — from Before We Leave_Data\Managed\
+   - UnityEngine.UI.dll — from Before We Leave_Data\Managed\
+   - Unity.TextMeshPro.dll — from Before We Leave_Data\Managed\
+   - MonoMod.RuntimeDetour.dll — from BepInEx\core\
+   - MonoMod.Utils.dll — from BepInEx\core\
+5. Build in Release configuration. The output DLL will be in bin/Release.
 
 ---
 

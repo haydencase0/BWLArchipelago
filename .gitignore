@@ -23,7 +23,7 @@ Desktop.ini
 
 # BepInEx - don't commit game DLLs you referenced
 # (they're on the user's machine already)
-*.dll
+# *.dll
 
 # But DO commit your own built plugin if you want
 # (comment out the line above and be selective instead)

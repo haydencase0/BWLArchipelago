@@ -64,12 +64,33 @@ namespace BWLArchipelago
         // Prevents duplicate checks if the player clicks Research multiple times.
         private static HashSet<string> queuedResearches = new HashSet<string>();
 
+        private static List<(string resourceName, int amount)> pendingResourceGrants 
+            = new List<(string, int)>();
+
         // Maps AP item names to internal game technology names where they differ.
         private static readonly Dictionary<string, string> itemNameToTechName
             = new Dictionary<string, string>
             {
                 // Add mappings here as you discover mismatches between AP and the game.
                 // Example: { "Farm", "Gardening" },
+            };
+
+        // Maps progressive AP item names to an ordered list of game tech names.
+        // Each time a progressive item is received, the next ungranted tech in the
+        // list is granted. This prevents players from getting stuck behind high-level
+        // techs they can't use yet.
+        private static readonly Dictionary<string, List<string>> progressiveTechGroups
+            = new Dictionary<string, List<string>>
+            {
+                { "Progressive Housing", new List<string> { "House", "School", "Apartment" } },
+                { "Progressive Mining", new List<string> { "Mining", "Metalwork", "Glass", "Laser" } },
+                { "Progressive Elevator", new List<string> { "Elevator", "SpaceElevator" } },
+                { "Progressive Power", new List<string> { "Repair", "Power", "OilPower", "CleanPower" } },
+                { "Progressive Happiness", new List<string> { "Pump", "Music", "MeetingSquare" } },
+                { "Progressive Food", new List<string> { "Gardening", "Cooking", "Farming", "Baking" } },
+                { "Progressive Upgrade", new List<string> { "Tinkering", "Automation", "Filtering" } },
+                { "Progressive Rocket", new List<string> { "Fuel", "Space" } },
+                { "Progressive Shipping", new List<string> { "Shipping", "AdvancedShipping", "Airships" } }
             };
 
         // Logger reference
@@ -341,17 +362,57 @@ namespace BWLArchipelago
 
                 Log.LogInfo("Item received from Archipelago: " + itemName);
 
-                string techName = itemName;
-                if (techName.EndsWith(" Technology"))
-                    techName = techName.Substring(0, techName.Length - " Technology".Length);
-
-                if (itemNameToTechName.TryGetValue(techName, out string mappedName))
+                // Check for resource grant items
+                if (itemName == "10 Stone")
                 {
-                    Log.LogInfo("Mapped '" + techName + "' to '" + mappedName + "'");
-                    techName = mappedName;
+                    Log.LogInfo("Resource item received: " + itemName);
+                    GrantResource("Stone", 10);
+                    continue;
                 }
 
-                GrantTechnology(techName);
+                // Check if this is a progressive item first
+                if (progressiveTechGroups.TryGetValue(itemName, out List<string> techList))
+                {
+                    // Find the first tech in the list not yet granted
+                    bool found = false;
+                    foreach (string techName in techList)
+                    {
+                        if (!grantedTechnologies.Contains(techName))
+                        {
+                            Log.LogInfo(
+                                "Progressive item: " + itemName +
+                                " -> granting: " + techName
+                            );
+                            GrantTechnology(techName);
+                            found = true;
+                            break;
+                        }
+                    }
+                    if (!found)
+                    {
+                        Log.LogWarning(
+                            "Progressive item received but all techs already granted: " +
+                            itemName
+                        );
+                    }
+                    continue;
+                }
+
+                // Non-progressive item - strip " Technology" suffix and apply name
+                // mapping if one exists, then grant directly
+                string singleTechName = itemName;
+                if (singleTechName.EndsWith(" Technology"))
+                    singleTechName = singleTechName.Substring(
+                        0, singleTechName.Length - " Technology".Length
+                    );
+
+                if (itemNameToTechName.TryGetValue(singleTechName, out string mappedName))
+                {
+                    Log.LogInfo("Mapped '" + singleTechName + "' to '" + mappedName + "'");
+                    singleTechName = mappedName;
+                }
+
+                GrantTechnology(singleTechName);
             }
         }
 
@@ -463,6 +524,46 @@ namespace BWLArchipelago
             Log.LogInfo("Remove result for " + techName + ": " + wasRemoved);
 
             Log.LogInfo("Technology granted: " + techName);
+        }
+
+        private static void GrantResource(string resourceName, int amount)
+        {
+            foreach (Entity entity in GameManager.EntityManager
+                .GetEntitiesWithComponent(EntityComponentType.Storage))
+            {
+                if (!entity.Enabled) continue;
+                BuildingComponent building = entity.GetBuilding();
+                if (building == null) continue;
+                if (!building.BuildingIsWarehouseOrStorageHub()) continue;
+
+                StorageComponent storage = entity.GetStorage();
+                if (storage == null) continue;
+
+                ResourceStorage resource = storage.GetIncomingResourceByName(resourceName);
+                if (resource != null)
+                {
+                    resource.Store(amount, false, false);
+                    Log.LogInfo("Granted " + amount + " " + resourceName +
+                        " to " + building.Name);
+                    return;
+                }
+            }
+
+            // No warehouse available yet - defer until one is built
+            Log.LogInfo("No warehouse found - deferring resource grant: " +
+                amount + " " + resourceName);
+            pendingResourceGrants.Add((resourceName, amount));
+        }
+
+        public static void FlushPendingResourceGrants()
+        {
+            if (pendingResourceGrants.Count == 0) return;
+
+            List<(string, int)> toGrant = new List<(string, int)>(pendingResourceGrants);
+            pendingResourceGrants.Clear();
+
+            foreach (var (resourceName, amount) in toGrant)
+                GrantResource(resourceName, amount);
         }
 
         private static void OnError(Exception exception, string message)

@@ -366,6 +366,24 @@ namespace BWLArchipelago
                 Log.LogInfo("Patch applied: TechnologyDetails.Update_Internal.");
             }
 
+            Type playerType2 = AccessTools.TypeByName("Player");
+            MethodInfo addRecordTarget = AccessTools.Method(
+                playerType2, "AddRecord",
+                new Type[] { typeof(string) }
+            );
+
+            if (addRecordTarget != null)
+            {
+                harmony.Patch(
+                    addRecordTarget,
+                    postfix: new HarmonyMethod(
+                        typeof(PlayerAddRecordPatch),
+                        nameof(PlayerAddRecordPatch.Postfix)
+                    )
+                );
+                Log.LogInfo("Patch applied: Player.AddRecord.");
+            }
+
             // --- Patch 14: ReadyToStartGame ---
             MethodInfo readyToStartTarget = AccessTools.Method(
                 typeof(GameController), "ReadyToStartGame"
@@ -385,6 +403,26 @@ namespace BWLArchipelago
                     )
                 );
                 Log.LogInfo("Patch applied: ReadyToStartGame.");
+            }
+
+            // Patch 15: LaunchSpaceShipAction.Execute
+            // Sends the goal check when the player launches their first rocket.
+            // Uses HasRecord("LaunchedSpaceship") to ensure it only fires once.
+
+            MethodInfo launchSpaceshipTarget = AccessTools.Method(
+                typeof(LaunchSpaceshipAction), "Execute"
+            );
+
+            if (launchSpaceshipTarget != null)
+            {
+                harmony.Patch(
+                    launchSpaceshipTarget,
+                    postfix: new HarmonyMethod(
+                        typeof(LaunchSpaceShipPatch),
+                        nameof(LaunchSpaceShipPatch.Postfix)
+                    )
+                );
+                Log.LogInfo("Patch applied: LaunchSpaceShipAction.Execute.");
             }
 
             // Create the connection UI - player connects via in-game screen
@@ -725,7 +763,8 @@ namespace BWLArchipelago
             if (techName == ArchipelagoManager.CurrentlyValidatingTech)
                 return true;
 
-            if (ArchipelagoManager.IsTechnologyResearched(techName))
+            if (ArchipelagoManager.IsTechnologyResearched(techName) ||
+                ArchipelagoManager.IsTechnologyGranted(techName))
             {
                 __result = true;
                 return false;
@@ -893,6 +932,42 @@ namespace BWLArchipelago
                     if (btn is Button b) b.interactable = isValid;
                 }
             }
+        }
+    }
+
+    public static class LaunchSpaceShipPatch
+    {
+        public static void Postfix(LaunchSpaceshipAction __instance)
+        {
+            FieldInfo playerIdField = AccessTools.Field(
+                typeof(LaunchSpaceshipAction), "playerId"
+            );
+            short playerId = (short)(playerIdField?.GetValue(__instance) ?? (short)0);
+            Player player = AppData.GetPlayer(playerId);
+
+            if (player == null) return;
+
+            // HasRecord fires after AddRecord so this is true on first launch
+            if (player.HasRecord("LaunchedSpaceship"))
+            {
+                BWLArchipelagoPlugin.Log.LogInfo(
+                    "Rocket launched - sending goal check."
+                );
+                ArchipelagoManager.SendCheck("Launched Rocket");
+            }
+        }
+    }
+
+    public static class PlayerAddRecordPatch
+    {
+        public static void Postfix(object __instance, string record)
+        {
+            if (record != "FinishedWhale") return;
+
+            BWLArchipelagoPlugin.Log.LogInfo(
+                "Game complete - space whale charmed - sending goal check."
+            );
+            ArchipelagoManager.SendCheck("Game Complete");
         }
     }
 

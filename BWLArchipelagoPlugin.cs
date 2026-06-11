@@ -1,8 +1,12 @@
 ﻿using BepInEx;
+using BepInEx.Configuration;
 using BepInEx.Logging;
 using HarmonyLib;
 using System;
 using System.Reflection;
+using UnityEngine;
+using UnityEngine.UI;
+using TMPro;
 
 namespace BWLArchipelago
 {
@@ -11,11 +15,36 @@ namespace BWLArchipelago
     {
         internal static ManualLogSource Log;
 
+        // Config entries for remembering last used connection details.
+        // These are pre-populated in the UI so the player doesn't have to
+        // retype them every launch.
+        internal static ConfigEntry<string> ConfigServerUrl;
+        internal static ConfigEntry<int> ConfigServerPort;
+        internal static ConfigEntry<string> ConfigSlotName;
+        internal static ConfigEntry<string> ConfigPassword;
+
         public BWLArchipelagoPlugin()
         {
             Log = BepInEx.Logging.Logger.CreateLogSource("BWL Archipelago");
 
             Log.LogInfo("BWL Archipelago mod loading...");
+
+            ConfigServerUrl = Config.Bind(
+                "Connection", "ServerUrl", "archipelago.gg",
+                "Last used Archipelago server address"
+            );
+            ConfigServerPort = Config.Bind(
+                "Connection", "ServerPort", 38281,
+                "Last used Archipelago server port"
+            );
+            ConfigSlotName = Config.Bind(
+                "Connection", "SlotName", "",
+                "Last used slot name"
+            );
+            ConfigPassword = Config.Bind(
+                "Connection", "Password", "",
+                "Last used password (leave blank if none)"
+            );
 
             ArchipelagoManager.Initialize(Log);
 
@@ -29,105 +58,488 @@ namespace BWLArchipelago
                 return;
             }
 
-            MethodInfo target = AccessTools.Method(
-                playerType,
-                "AddResearchedTechnology",
-                new Type[]
-                {
-                    technologyType,
-                    entityType,
-                    typeof(bool)
-                }
+            Harmony harmony = new Harmony(PluginInfo.PLUGIN_GUID);
+
+            // --- Patch 1: StartResearchAction.Execute ---
+            MethodInfo executeTarget = AccessTools.Method(
+                typeof(StartResearchAction), "Execute"
             );
 
-            if (target == null)
+            if (executeTarget == null)
+            {
+                Log.LogError("Could not find StartResearchAction.Execute. Aborting.");
+                return;
+            }
+
+            harmony.Patch(
+                executeTarget,
+                prefix: new HarmonyMethod(
+                    typeof(StartResearchExecutePatch),
+                    nameof(StartResearchExecutePatch.Prefix)
+                ),
+                postfix: new HarmonyMethod(
+                    typeof(StartResearchExecutePatch),
+                    nameof(StartResearchExecutePatch.Postfix)
+                )
+            );
+
+            Log.LogInfo("Patch applied: StartResearchAction.Execute.");
+
+            // --- Patch 2: AddResearchedTechnology ---
+            MethodInfo addResearchedTarget = AccessTools.Method(
+                playerType,
+                "AddResearchedTechnology",
+                new Type[] { technologyType, entityType, typeof(bool) }
+            );
+
+            if (addResearchedTarget == null)
             {
                 Log.LogError("Could not find AddResearchedTechnology. Aborting.");
                 return;
             }
 
-            Harmony harmony = new Harmony(PluginInfo.PLUGIN_GUID);
-
-            HarmonyMethod prefix = new HarmonyMethod(
-                typeof(AddResearchedTechnologyPatch),
-                nameof(AddResearchedTechnologyPatch.Prefix)
+            harmony.Patch(
+                addResearchedTarget,
+                prefix: new HarmonyMethod(
+                    typeof(AddResearchedTechnologyPatch),
+                    nameof(AddResearchedTechnologyPatch.Prefix)
+                ),
+                postfix: new HarmonyMethod(
+                    typeof(AddResearchedTechnologyPatch),
+                    nameof(AddResearchedTechnologyPatch.Postfix)
+                )
             );
 
-            HarmonyMethod postfix = new HarmonyMethod(
-                typeof(AddResearchedTechnologyPatch),
-                nameof(AddResearchedTechnologyPatch.Postfix)
+            Log.LogInfo("Patch applied: AddResearchedTechnology.");
+
+            // --- Patch 3: PlanetIsland.EvaluateAvailableBuildings ---
+            try
+            {
+                Type planetIslandType = AccessTools.TypeByName("PlanetIsland");
+                MethodInfo evaluateTarget = planetIslandType != null
+                    ? AccessTools.Method(
+                        planetIslandType,
+                        "EvaluateAvailableBuildings",
+                        new Type[] { typeof(bool), typeof(bool) }
+                    )
+                    : null;
+
+                if (evaluateTarget == null)
+                {
+                    Log.LogError(
+                        "Could not find PlanetIsland.EvaluateAvailableBuildings."
+                    );
+                }
+                else
+                {
+                    harmony.Patch(
+                        evaluateTarget,
+                        prefix: new HarmonyMethod(
+                            typeof(EvaluateAvailableBuildingsPatch),
+                            nameof(EvaluateAvailableBuildingsPatch.Prefix)
+                        ),
+                        postfix: new HarmonyMethod(
+                            typeof(EvaluateAvailableBuildingsPatch),
+                            nameof(EvaluateAvailableBuildingsPatch.Postfix)
+                        )
+                    );
+                    Log.LogInfo(
+                        "Patch applied: PlanetIsland.EvaluateAvailableBuildings."
+                    );
+                }
+            }
+            catch (Exception ex)
+            {
+                Log.LogError(
+                    "Exception patching EvaluateAvailableBuildings: " + ex.Message
+                );
+            }
+
+            // --- Patch 4: GameCardController.EvaluateBuildingButtons ---
+            Type cardControllerType = AccessTools.TypeByName("GameCardController");
+
+            MethodInfo evalBuildingButtonsTarget = cardControllerType != null
+                ? AccessTools.Method(cardControllerType, "EvaluateBuildingButtons")
+                : null;
+
+            if (evalBuildingButtonsTarget != null)
+            {
+                harmony.Patch(
+                    evalBuildingButtonsTarget,
+                    prefix: new HarmonyMethod(
+                        typeof(EvaluateBuildingButtonsPatch),
+                        nameof(EvaluateBuildingButtonsPatch.Prefix)
+                    )
+                );
+                Log.LogInfo(
+                    "Patch applied: GameCardController.EvaluateBuildingButtons."
+                );
+            }
+
+            // --- Patch 5: GameCardController.EvaluateAvailableBuildingCards ---
+            MethodInfo evalBuildingCardsTarget = cardControllerType != null
+                ? AccessTools.Method(
+                    cardControllerType,
+                    "EvaluateAvailableBuildingCards",
+                    new Type[] { typeof(bool) }
+                )
+                : null;
+
+            if (evalBuildingCardsTarget != null)
+            {
+                harmony.Patch(
+                    evalBuildingCardsTarget,
+                    prefix: new HarmonyMethod(
+                        typeof(EvaluateAvailableBuildingCardsPatch),
+                        nameof(EvaluateAvailableBuildingCardsPatch.Prefix)
+                    )
+                );
+                Log.LogInfo(
+                    "Patch applied: GameCardController.EvaluateAvailableBuildingCards."
+                );
+            }
+
+            // --- Patch 6: TaskOutputLibrary.Execute ---
+            Type taskOutputLibraryType = AccessTools.TypeByName("TaskOutputLibrary");
+
+            MethodInfo taskOutputLibraryTarget = taskOutputLibraryType != null
+                ? AccessTools.Method(taskOutputLibraryType, "Execute")
+                : null;
+
+            if (taskOutputLibraryTarget == null)
+            {
+                Log.LogError("Could not find TaskOutputLibrary.Execute.");
+            }
+            else
+            {
+                harmony.Patch(
+                    taskOutputLibraryTarget,
+                    prefix: new HarmonyMethod(
+                        typeof(TaskOutputLibraryPatch),
+                        nameof(TaskOutputLibraryPatch.Prefix)
+                    )
+                );
+                Log.LogInfo("Patch applied: TaskOutputLibrary.Execute.");
+            }
+
+            // --- Patch 7: TaskOutputLibrary.IsValid ---
+            MethodInfo taskOutputLibraryIsValidTarget = taskOutputLibraryType != null
+                ? AccessTools.Method(taskOutputLibraryType, "IsValid")
+                : null;
+
+            if (taskOutputLibraryIsValidTarget == null)
+            {
+                Log.LogError("Could not find TaskOutputLibrary.IsValid.");
+            }
+            else
+            {
+                harmony.Patch(
+                    taskOutputLibraryIsValidTarget,
+                    prefix: new HarmonyMethod(
+                        typeof(TaskOutputLibraryIsValidPatch),
+                        nameof(TaskOutputLibraryIsValidPatch.Prefix)
+                    )
+                );
+                Log.LogInfo("Patch applied: TaskOutputLibrary.IsValid.");
+            }
+
+            // --- Patch 8: CancelResearchAction.Execute ---
+            MethodInfo cancelExecuteTarget = AccessTools.Method(
+                typeof(CancelResearchAction), "Execute"
             );
 
-            harmony.Patch(target, prefix: prefix, postfix: postfix);
+            if (cancelExecuteTarget != null)
+            {
+                harmony.Patch(
+                    cancelExecuteTarget,
+                    postfix: new HarmonyMethod(
+                        typeof(CancelResearchExecutePatch),
+                        nameof(CancelResearchExecutePatch.Postfix)
+                    )
+                );
+                Log.LogInfo("Patch applied: CancelResearchAction.Execute.");
+            }
 
-            Log.LogInfo("Harmony patch applied.");
+            // --- Patch 9: LibraryComponent.DequeueTechnology ---
+            MethodInfo dequeueTechTarget = AccessTools.Method(
+                typeof(LibraryComponent), "DequeueTechnology"
+            );
 
-            // Connect to Archipelago
-            ArchipelagoManager.Connect();
+            if (dequeueTechTarget != null)
+            {
+                harmony.Patch(
+                    dequeueTechTarget,
+                    prefix: new HarmonyMethod(
+                        typeof(DequeueTechnologyPatch),
+                        nameof(DequeueTechnologyPatch.Prefix)
+                    ),
+                    postfix: new HarmonyMethod(
+                        typeof(DequeueTechnologyPatch),
+                        nameof(DequeueTechnologyPatch.Postfix)
+                    )
+                );
+                Log.LogInfo("Patch applied: LibraryComponent.DequeueTechnology.");
+            }
+
+            // --- Patch 10: StartResearchAction.IsValid ---
+            MethodInfo isValidTarget = AccessTools.Method(
+                typeof(StartResearchAction),
+                "IsValid",
+                new Type[] { typeof(short), typeof(Entity), typeof(TechnologyDefinition),
+                             typeof(string), typeof(int), typeof(string).MakeByRefType() }
+            );
+
+            if (isValidTarget != null)
+            {
+                harmony.Patch(
+                    isValidTarget,
+                    prefix: new HarmonyMethod(
+                        typeof(StartResearchIsValidPatch),
+                        nameof(StartResearchIsValidPatch.Prefix)
+                    ),
+                    postfix: new HarmonyMethod(
+                        typeof(StartResearchIsValidPatch),
+                        nameof(StartResearchIsValidPatch.Postfix)
+                    )
+                );
+                Log.LogInfo("Patch applied: StartResearchAction.IsValid.");
+            }
+
+            // --- Patch 11: HasResearchedTechnology ---
+            MethodInfo hasResearchedTarget = AccessTools.Method(
+                playerType,
+                "HasResearchedTechnology",
+                new Type[] { technologyType }
+            );
+
+            if (hasResearchedTarget != null)
+            {
+                harmony.Patch(
+                    hasResearchedTarget,
+                    prefix: new HarmonyMethod(
+                        typeof(HasResearchedTechnologyPatch),
+                        nameof(HasResearchedTechnologyPatch.Prefix)
+                    )
+                );
+                Log.LogInfo("Patch applied: HasResearchedTechnology.");
+            }
+
+            // --- Patch 12: TechnologyButton.Update_Internal ---
+            MethodInfo updateInternalTarget = AccessTools.Method(
+                typeof(TechnologyButton), "Update_Internal"
+            );
+
+            if (updateInternalTarget == null)
+            {
+                Log.LogError("Could not find TechnologyButton.Update_Internal.");
+            }
+            else
+            {
+                harmony.Patch(
+                    updateInternalTarget,
+                    postfix: new HarmonyMethod(
+                        typeof(TechnologyButtonUpdatePatch),
+                        nameof(TechnologyButtonUpdatePatch.Postfix)
+                    )
+                );
+                Log.LogInfo("Patch applied: TechnologyButton.Update_Internal.");
+            }
+
+            // --- Patch 13: TechnologyDetails.Update_Internal ---
+            MethodInfo detailsUpdateTarget = AccessTools.Method(
+                AccessTools.TypeByName("TechnologyDetails"), "Update_Internal"
+            );
+
+            if (detailsUpdateTarget == null)
+            {
+                Log.LogError("Could not find TechnologyDetails.Update_Internal.");
+            }
+            else
+            {
+                harmony.Patch(
+                    detailsUpdateTarget,
+                    postfix: new HarmonyMethod(
+                        typeof(TechnologyDetailsUpdatePatch),
+                        nameof(TechnologyDetailsUpdatePatch.Postfix)
+                    )
+                );
+                Log.LogInfo("Patch applied: TechnologyDetails.Update_Internal.");
+            }
+
+            Type playerType2 = AccessTools.TypeByName("Player");
+            MethodInfo addRecordTarget = AccessTools.Method(
+                playerType2, "AddRecord",
+                new Type[] { typeof(string) }
+            );
+
+            if (addRecordTarget != null)
+            {
+                harmony.Patch(
+                    addRecordTarget,
+                    postfix: new HarmonyMethod(
+                        typeof(PlayerAddRecordPatch),
+                        nameof(PlayerAddRecordPatch.Postfix)
+                    )
+                );
+                Log.LogInfo("Patch applied: Player.AddRecord.");
+            }
+
+            // --- Patch 14: ReadyToStartGame ---
+            MethodInfo readyToStartTarget = AccessTools.Method(
+                typeof(GameController), "ReadyToStartGame"
+            );
+
+            if (readyToStartTarget == null)
+            {
+                Log.LogError("Could not find ReadyToStartGame.");
+            }
+            else
+            {
+                harmony.Patch(
+                    readyToStartTarget,
+                    postfix: new HarmonyMethod(
+                        typeof(ReadyToStartGamePatch),
+                        nameof(ReadyToStartGamePatch.Postfix)
+                    )
+                );
+                Log.LogInfo("Patch applied: ReadyToStartGame.");
+            }
+
+            // Patch 15: LaunchSpaceShipAction.Execute
+            // Sends the goal check when the player launches their first rocket.
+            // Uses HasRecord("LaunchedSpaceship") to ensure it only fires once.
+
+            MethodInfo launchSpaceshipTarget = AccessTools.Method(
+                typeof(LaunchSpaceshipAction), "Execute"
+            );
+
+            if (launchSpaceshipTarget != null)
+            {
+                harmony.Patch(
+                    launchSpaceshipTarget,
+                    postfix: new HarmonyMethod(
+                        typeof(LaunchSpaceShipPatch),
+                        nameof(LaunchSpaceShipPatch.Postfix)
+                    )
+                );
+                Log.LogInfo("Patch applied: LaunchSpaceShipAction.Execute.");
+            }
+
+            // Create the connection UI - player connects via in-game screen
+            // instead of editing config files. Defined in ArchipelagoConnectionUI.cs.
+            var uiObject = new GameObject("ArchipelagoConnectionUI");
+            GameObject.DontDestroyOnLoad(uiObject);
+            uiObject.AddComponent<ArchipelagoConnectionUI>();
 
             Log.LogInfo("BWL Archipelago mod ready.");
         }
     }
 
+    // Patch 1: Sends the AP check when the player queues a research.
+    // Postfix logs state after Execute for debugging.
+    public static class StartResearchExecutePatch
+    {
+        public static bool Prefix(StartResearchAction __instance)
+        {
+            FieldInfo techField = AccessTools.Field(
+                typeof(StartResearchAction), "technology"
+            );
+            TechnologyDefinition technology = techField?.GetValue(__instance)
+                as TechnologyDefinition;
+
+            if (technology == null)
+                return true;
+
+            string techName = technology.Name;
+
+            if (ArchipelagoManager.IsResearchQueued(techName))
+            {
+                BWLArchipelagoPlugin.Log.LogInfo(
+                    "Already queued check for: " + techName + " - blocking execute."
+                );
+                return false;
+            }
+
+            BWLArchipelagoPlugin.Log.LogInfo(
+                "Research queued, sending AP check: " + techName
+            );
+            ArchipelagoManager.SendCheck("Researched " + techName);
+
+            return true;
+        }
+
+        public static void Postfix(StartResearchAction __instance)
+        {
+            FieldInfo libField = AccessTools.Field(
+                typeof(StartResearchAction), "libraryEntity"
+            );
+            Entity libraryEntity = libField?.GetValue(__instance) as Entity;
+            if (libraryEntity == null) return;
+
+            BuildingComponent building = libraryEntity.GetBuilding();
+            LibraryComponent library = libraryEntity.GetLibrary();
+
+            var tasks = building?.GetBuildingTasks();
+            BWLArchipelagoPlugin.Log.LogInfo(
+                "After Execute - ActiveTasks: " + (building?.ActiveTasks?.Count ?? -1) +
+                " | Researching: " + (library?.ResearchingTechnologies?.Count ?? -1) +
+                " | BuildingTasks: " + (tasks?.Count ?? -1) +
+                " | TaskIsValid: " + (tasks?.Count > 0
+                    ? tasks[0].IsValid(libraryEntity, null).ToString()
+                    : "no tasks")
+            );
+        }
+    }
+
+    // Patch 2: Prefix sets IsCompletingPlayerCheck for non-AP calls.
+    // Postfix removes tech from researchedTechnologies after the original runs
+    // so buildings don't unlock from player checks.
+    // The original runs fully so library queue transitions work correctly.
     public static class AddResearchedTechnologyPatch
     {
         public static void Prefix(
             object __instance,
             object technology,
             object discoveringEntity,
-            bool grantedByRepair,
-            ref bool __state)
+            bool grantedByRepair)
         {
-            if (technology == null)
-            {
-                __state = false;
-                return;
-            }
+            if (technology == null) return;
+            if (ArchipelagoManager.IsGrantingTechnology) return;
 
-            __state = GetHasResearched(__instance, technology);
+            ArchipelagoManager.IsCompletingPlayerCheck = true;
         }
 
         public static void Postfix(
             object __instance,
             object technology,
             object discoveringEntity,
-            bool grantedByRepair,
-            bool __state)
+            bool grantedByRepair)
         {
-            if (technology == null)
-                return;
-
-            bool hadBefore = __state;
-            bool hasAfter = GetHasResearched(__instance, technology);
             string techName = GetName(technology);
-
-            if (!hadBefore && hasAfter)
-            {
-                BWLArchipelagoPlugin.Log.LogInfo(
-                    "Archipelago: NEW technology researched -> " + techName
-                );
-
-                ArchipelagoManager.SendCheck("Researched " + techName);
-            }
-        }
-
-        private static bool GetHasResearched(object player, object technology)
-        {
-            if (player == null || technology == null)
-                return false;
-
-            MethodInfo method = AccessTools.Method(
-                player.GetType(),
-                "HasResearchedTechnology",
-                new Type[] { technology.GetType() }
+            BWLArchipelagoPlugin.Log.LogInfo(
+                "AddResearchedTechnology Postfix - technology: " + techName +
+                " | IsGrantingTechnology: " + ArchipelagoManager.IsGrantingTechnology
             );
 
-            if (method == null)
-                return false;
+            if (!ArchipelagoManager.IsCompletingPlayerCheck) return;
+            ArchipelagoManager.IsCompletingPlayerCheck = false;
 
-            object result = method.Invoke(player, new object[] { technology });
+            if (technology == null) return;
 
-            return result is bool b && b;
+            FieldInfo researchedField = AccessTools.Field(
+                __instance.GetType(), "researchedTechnologies"
+            );
+            object researchedSet = researchedField?.GetValue(__instance);
+            if (researchedSet != null)
+            {
+                MethodInfo removeMethod = researchedSet.GetType().GetMethod("Remove");
+                removeMethod?.Invoke(researchedSet, new object[] { technology });
+            }
+
+            BWLArchipelagoPlugin.Log.LogInfo(
+                "Player check completed: " + techName +
+                " - removed from researchedTechnologies."
+            );
         }
 
         internal static string GetName(object technology)
@@ -154,6 +566,183 @@ namespace BWLArchipelago
             return technology.GetType().Name;
         }
     }
+
+    // Patch 3: Skips during player checks so buildings don't unlock.
+    // For all other calls: adds all granted techs temporarily so buildings
+    // unlocked by AP grants stay available.
+    public static class EvaluateAvailableBuildingsPatch
+    {
+        public static bool Prefix()
+        {
+            if (ArchipelagoManager.IsCompletingPlayerCheck)
+                return false;
+
+            ArchipelagoManager.AddGrantedTechsToResearched();
+            return true;
+        }
+
+        public static void Postfix()
+        {
+            if (ArchipelagoManager.IsCompletingPlayerCheck)
+                return;
+
+            ArchipelagoManager.RemoveGrantedTechsFromResearched();
+        }
+    }
+
+    // Patch 4: Skips during player checks so building card state doesn't update.
+    public static class EvaluateBuildingButtonsPatch
+    {
+        public static bool Prefix()
+        {
+            return !ArchipelagoManager.IsCompletingPlayerCheck;
+        }
+    }
+
+    // Patch 5: Skips during player checks so building card state doesn't update.
+    public static class EvaluateAvailableBuildingCardsPatch
+    {
+        public static bool Prefix()
+        {
+            return !ArchipelagoManager.IsCompletingPlayerCheck;
+        }
+    }
+
+    // Patch 6: Logs library task completion for debugging.
+    public static class TaskOutputLibraryPatch
+    {
+        public static bool Prefix(Entity entity)
+        {
+            if (ArchipelagoManager.IsGrantingTechnology)
+                return true;
+
+            LibraryComponent library = entity?.GetLibrary();
+            if (library == null) return true;
+            if (library.ResearchingTechnologies.Count == 0) return true;
+
+            TechnologyDefinition technology = library.ResearchingTechnologies[0];
+            string techName = technology.Name;
+
+            BWLArchipelagoPlugin.Log.LogInfo(
+                "TaskOutputLibrary firing for: " + techName +
+                " | IsQueued: " + ArchipelagoManager.IsResearchQueued(techName)
+            );
+
+            return true;
+        }
+    }
+
+    // Patch 7: Replaces TaskOutputLibrary.IsValid prerequisite check.
+    // Uses our own IsTechnologyResearched and IsTechnologyGranted instead of
+    // HasResearchedTechnology so techs removed from researchedTechnologies
+    // still satisfy prerequisites for downstream research.
+    public static class TaskOutputLibraryIsValidPatch
+    {
+        public static bool Prefix(Entity entity, ref bool __result)
+        {
+            LibraryComponent library = entity?.GetLibrary();
+            if (library == null || library.ResearchingTechnologies.Count == 0)
+            {
+                __result = false;
+                return false;
+            }
+
+            TechnologyDefinition technology = library.ResearchingTechnologies[0];
+
+            if (technology.Prerequsites != null)
+            {
+                foreach (var prereq in technology.Prerequsites)
+                {
+                    string prereqName = prereq.technology.Name;
+                    if (!ArchipelagoManager.IsTechnologyResearched(prereqName) &&
+                        !ArchipelagoManager.IsTechnologyGranted(prereqName))
+                    {
+                        __result = false;
+                        return false;
+                    }
+                }
+            }
+
+            __result = true;
+            return false;
+        }
+    }
+
+    // Patch 8: Removes the tech from queuedResearches when cancelled.
+    public static class CancelResearchExecutePatch
+    {
+        public static void Postfix(CancelResearchAction __instance)
+        {
+            FieldInfo techField = AccessTools.Field(
+                typeof(CancelResearchAction), "technology"
+            );
+            TechnologyDefinition technology = techField?.GetValue(__instance)
+                as TechnologyDefinition;
+
+            if (technology == null) return;
+
+            ArchipelagoManager.CancelResearch(technology.Name);
+        }
+    }
+
+    // Patch 9: Prefix marks the tech as checked so the checkmark appears.
+    // Postfix flushes deferred AP grants after dequeue fully completes.
+    public static class DequeueTechnologyPatch
+    {
+        public static void Prefix(LibraryComponent __instance, TechnologyDefinition technology)
+        {
+            if (technology == null) return;
+            if (ArchipelagoManager.IsGrantingTechnology) return;
+
+            string techName = technology.Name;
+
+            BWLArchipelagoPlugin.Log.LogInfo(
+                "DequeueTechnology called for: " + techName +
+                " | IsQueued: " + ArchipelagoManager.IsResearchQueued(techName)
+            );
+
+            if (!ArchipelagoManager.IsResearchQueued(techName)) return;
+
+            ArchipelagoManager.MarkTechnologyResearched(techName);
+        }
+
+        public static void Postfix(LibraryComponent __instance, TechnologyDefinition technology)
+        {
+            if (technology == null) return;
+            if (ArchipelagoManager.IsGrantingTechnology) return;
+            if (!ArchipelagoManager.IsTechnologyResearched(technology.Name)) return;
+
+            ArchipelagoManager.OnGameReady();
+
+            BuildingComponent building = __instance.Owner?.GetBuilding();
+            BWLArchipelagoPlugin.Log.LogInfo(
+                "After Dequeue flush - ActiveTasks: " +
+                (building?.ActiveTasks?.Count ?? -1) +
+                " | Researching: " + __instance.ResearchingTechnologies.Count +
+                " | Operating: " + (building?.Operating ?? false)
+            );
+        }
+    }
+
+    // Patch 10: Sets flags around StartResearchAction.IsValid.
+    public static class StartResearchIsValidPatch
+    {
+        public static void Prefix(TechnologyDefinition technology)
+        {
+            ArchipelagoManager.IsCheckingResearchValidity = true;
+            ArchipelagoManager.CurrentlyValidatingTech = technology?.Name;
+        }
+
+        public static void Postfix()
+        {
+            ArchipelagoManager.IsCheckingResearchValidity = false;
+            ArchipelagoManager.CurrentlyValidatingTech = null;
+        }
+    }
+
+    // Patch 11: Only active during StartResearchAction.IsValid.
+    // Returns true for player-checked techs so they satisfy prerequisites
+    // when the player tries to queue downstream research.
     public static class HasResearchedTechnologyPatch
     {
         public static bool Prefix(
@@ -162,17 +751,233 @@ namespace BWLArchipelago
             ref bool __result)
         {
             if (technology == null)
-                return true; // let original run
+                return true;
+
+            if (!ArchipelagoManager.IsCheckingResearchValidity)
+                return true;
 
             string techName = AddResearchedTechnologyPatch.GetName(technology);
+            if (techName == null || techName == "<null>")
+                return true;
 
-            if (ArchipelagoManager.IsTechnologyUnlocked(techName))
+            if (techName == ArchipelagoManager.CurrentlyValidatingTech)
+                return true;
+
+            if (ArchipelagoManager.IsTechnologyResearched(techName) ||
+                ArchipelagoManager.IsTechnologyGranted(techName))
             {
                 __result = true;
-                return false; // skip original method, return our result
+                return false;
             }
 
-            return true; // technology not from AP, let original run
+            return true;
+        }
+    }
+
+    // Patch 12: Shows checkmark for player-checked techs in the tech tree.
+    public static class TechnologyButtonUpdatePatch
+    {
+        public static void Postfix(object __instance)
+        {
+            FieldInfo techField = AccessTools.Field(__instance.GetType(), "technology");
+            object technology = techField?.GetValue(__instance);
+            if (technology == null) return;
+
+            string techName = AddResearchedTechnologyPatch.GetName(technology);
+            if (techName == null || techName == "<null>") return;
+
+            if (!ArchipelagoManager.IsTechnologyResearched(techName)) return;
+
+            FieldInfo doneField = AccessTools.Field(__instance.GetType(), "Done");
+            FieldInfo zoomedDoneField = AccessTools.Field(
+                __instance.GetType(), "ZoomedDone"
+            );
+            FieldInfo backgroundField = AccessTools.Field(
+                __instance.GetType(), "Background"
+            );
+            FieldInfo completeBgField = AccessTools.Field(
+                __instance.GetType(), "CompleteBackground"
+            );
+            FieldInfo doneIconField = AccessTools.Field(__instance.GetType(), "DoneIcon");
+            FieldInfo iconField = AccessTools.Field(__instance.GetType(), "Icon");
+            FieldInfo requirementsField = AccessTools.Field(
+                __instance.GetType(), "requirements"
+            );
+            FieldInfo timerBgField = AccessTools.Field(
+                __instance.GetType(), "TimerBackground"
+            );
+            FieldInfo zoomedTimerBgField = AccessTools.Field(
+                __instance.GetType(), "ZoomedTimerBackground"
+            );
+            FieldInfo buttonField = AccessTools.Field(__instance.GetType(), "button");
+            FieldInfo colourBorderField = AccessTools.Field(
+                __instance.GetType(), "ColourBorder"
+            );
+            FieldInfo colourBorderZoomedField = AccessTools.Field(
+                __instance.GetType(), "ColourBorderZoomed"
+            );
+
+            object done = doneField?.GetValue(__instance);
+            object zoomedDone = zoomedDoneField?.GetValue(__instance);
+            object background = backgroundField?.GetValue(__instance);
+            object completeBg = completeBgField?.GetValue(__instance);
+            object doneIcon = doneIconField?.GetValue(__instance);
+            object icon = iconField?.GetValue(__instance);
+            object requirements = requirementsField?.GetValue(__instance);
+            object timerBg = timerBgField?.GetValue(__instance);
+            object zoomedTimerBg = zoomedTimerBgField?.GetValue(__instance);
+            object button = buttonField?.GetValue(__instance);
+            object colourBorder = colourBorderField?.GetValue(__instance);
+            object colourBorderZoomed = colourBorderZoomedField?.GetValue(__instance);
+
+            if (done is GameObject doneGo) doneGo.SetActive(true);
+            if (zoomedDone is GameObject zDoneGo) zDoneGo.SetActive(true);
+            if (doneIcon is Image doneImg) doneImg.gameObject.SetActive(true);
+            if (icon is Image iconImg) iconImg.gameObject.SetActive(false);
+            if (requirements is GameObject reqGo) reqGo.SetActive(false);
+            if (timerBg is GameObject timerGo) timerGo.SetActive(false);
+            if (zoomedTimerBg is GameObject zTimerGo) zTimerGo.SetActive(false);
+            if (background is Image bgImg && completeBg is Sprite completeSpr)
+                bgImg.sprite = completeSpr;
+            if (button is Button btn) btn.interactable = true;
+            if (colourBorder is Image cb) cb.gameObject.SetActive(false);
+            if (colourBorderZoomed is Image cbz) cbz.gameObject.SetActive(false);
+        }
+    }
+
+    // Patch 13: For AP-granted items the player hasn't checked yet,
+    // undoes the "done" state and shows the Research button in the popup.
+    public static class TechnologyDetailsUpdatePatch
+    {
+        public static void Postfix(object __instance)
+        {
+            FieldInfo techField = AccessTools.Field(__instance.GetType(), "technology");
+            object technology = techField?.GetValue(__instance);
+            if (technology == null) return;
+
+            string techName = AddResearchedTechnologyPatch.GetName(technology);
+            if (techName == null || techName == "<null>") return;
+
+            bool isPlayerChecked = ArchipelagoManager.IsTechnologyResearched(techName);
+            bool isAPGranted = ArchipelagoManager.IsTechnologyGranted(techName);
+
+            if (!isAPGranted || isPlayerChecked) return;
+
+            FieldInfo doneField = AccessTools.Field(__instance.GetType(), "Done");
+            FieldInfo researchButtonField = AccessTools.Field(
+                __instance.GetType(), "ResearchButton"
+            );
+            FieldInfo researchButtonTextField = AccessTools.Field(
+                __instance.GetType(), "ResearchButtonText"
+            );
+            FieldInfo requirementsField = AccessTools.Field(
+                __instance.GetType(), "requirements"
+            );
+            FieldInfo timeDisplayField = AccessTools.Field(
+                __instance.GetType(), "TimeDisplay"
+            );
+            FieldInfo infoBackgroundField = AccessTools.Field(
+                __instance.GetType(), "InfoBackground"
+            );
+            FieldInfo viewField = AccessTools.Field(__instance.GetType(), "view");
+            FieldInfo libraryField = AccessTools.Field(__instance.GetType(), "library");
+
+            object done = doneField?.GetValue(__instance);
+            object researchButton = researchButtonField?.GetValue(__instance);
+            object researchButtonText = researchButtonTextField?.GetValue(__instance);
+            object requirements = requirementsField?.GetValue(__instance);
+            object timeDisplay = timeDisplayField?.GetValue(__instance);
+            object infoBackground = infoBackgroundField?.GetValue(__instance);
+            object view = viewField?.GetValue(__instance);
+            object library = libraryField?.GetValue(__instance);
+
+            if (done is GameObject doneGo) doneGo.SetActive(false);
+            if (requirements is GameObject reqGo) reqGo.SetActive(true);
+            if (timeDisplay is GameObject timeGo) timeGo.SetActive(true);
+            if (infoBackground is GameObject infoBgGo) infoBgGo.SetActive(true);
+
+            PropertyInfo gameObjectProp = researchButton?.GetType().GetProperty("gameObject");
+            object researchButtonGo = gameObjectProp?.GetValue(researchButton, null);
+            if (researchButtonGo is GameObject rbGo) rbGo.SetActive(true);
+
+            if (researchButtonText is TextMeshProUGUI rbText)
+                rbText.text = GameController.GetTranslation("UI/Research");
+
+            if (view != null && library is Entity libraryEntity)
+            {
+                PropertyInfo playerProp = AccessTools.Property(view.GetType(), "Player");
+                object player = playerProp?.GetValue(view, null);
+
+                if (player != null && technology is TechnologyDefinition techDef)
+                {
+                    PropertyInfo playerIdProp = AccessTools.Property(
+                        player.GetType(), "PlayerId"
+                    );
+                    object playerId = playerIdProp?.GetValue(player, null);
+
+                    string errorReason;
+                    bool isValid = StartResearchAction.IsValid(
+                        (short)(int)playerId,
+                        libraryEntity,
+                        techDef,
+                        "",
+                        0,
+                        out errorReason
+                    );
+
+                    PropertyInfo buttonProp = AccessTools.Property(
+                        researchButton.GetType(), "Button"
+                    );
+                    object btn = buttonProp?.GetValue(researchButton, null);
+                    if (btn is Button b) b.interactable = isValid;
+                }
+            }
+        }
+    }
+
+    public static class LaunchSpaceShipPatch
+    {
+        public static void Postfix(LaunchSpaceshipAction __instance)
+        {
+            FieldInfo playerIdField = AccessTools.Field(
+                typeof(LaunchSpaceshipAction), "playerId"
+            );
+            short playerId = (short)(playerIdField?.GetValue(__instance) ?? (short)0);
+            Player player = AppData.GetPlayer(playerId);
+
+            if (player == null) return;
+
+            // HasRecord fires after AddRecord so this is true on first launch
+            if (player.HasRecord("LaunchedSpaceship"))
+            {
+                BWLArchipelagoPlugin.Log.LogInfo(
+                    "Rocket launched - sending goal check."
+                );
+                ArchipelagoManager.SendCheck("Launched Rocket");
+            }
+        }
+    }
+
+    public static class PlayerAddRecordPatch
+    {
+        public static void Postfix(object __instance, string record)
+        {
+            if (record != "FinishedWhale") return;
+
+            BWLArchipelagoPlugin.Log.LogInfo(
+                "Game complete - space whale charmed - sending goal check."
+            );
+            ArchipelagoManager.SendCheck("Game Complete");
+        }
+    }
+
+    // Patch 14: Flushes pending AP grants when the game finishes loading.
+    public static class ReadyToStartGamePatch
+    {
+        public static void Postfix()
+        {
+            BWLArchipelagoPlugin.Log.LogInfo("Game ready - flushing pending unlocks.");
+            ArchipelagoManager.OnGameReady();
         }
     }
 }

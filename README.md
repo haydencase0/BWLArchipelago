@@ -1,0 +1,155 @@
+# Before We Leave Archipelago Mod
+
+A [BepInEx](https://github.com/BepInEx/BepInEx) mod that integrates Before We Leave with the [Archipelago](https://archipelago.gg) multiworld randomizer. Research technologies to send checks to the Archipelago server, and receive randomized technology unlocks from other players in your multiworld session.
+
+---
+
+## What Does It Do?
+
+- **Sending checks:** When you research a technology in the library, the mod sends that location check to the Archipelago server.
+- **Receiving items:** When you receive a technology item from Archipelago (from yourself or another player), the mod grants that technology as a building unlock without awarding a checkmark.
+- **Progressive items:** Some technologies are grouped into progressive chains (e.g. Progressive Mining unlocks Mining → Metalwork → Glass → Laser in order) so you can never receive a high-level tech before the lower-level ones.
+- **Win conditions:** The mod supports three win conditions configurable in your YAML:
+  - **Launch Rocket** — launch your first rocket (short game)
+  - **Colonize Planets** — colonize a set number of planets (medium game)
+  - **Complete Game** — charm the large space whale with a fully upgraded WhaleCharmer (long game)
+
+---
+
+## Requirements
+
+- Before We Leave (Steam)
+- [BepInEx 5.4.x](https://github.com/BepInEx/BepInEx/releases) for Unity (x64)
+- [Archipelago](https://archipelago.gg/downloads) 0.6.7 or later
+- The Before We Leave APworld (included in this repository)
+
+---
+
+## Installation
+
+### Step 1: Install BepInEx
+
+1. Download [BepInEx 5.4.x](https://github.com/BepInEx/BepInEx/releases) — make sure to get the **x64 Unity** version (`BepInEx_win_x64_5.4.x.zip`).
+2. Extract the contents of the zip into your Before We Leave game folder. The game folder is typically:
+   ```
+   C:\Program Files (x86)\Steam\steamapps\common\Before We Leave
+   ```
+3. Your game folder should now contain a `BepInEx` folder alongside `Before We Leave.exe`.
+4. Launch the game once to let BepInEx initialize, then close it. A `BepInEx/plugins` folder will be created.
+
+### Step 2: Install the Mod
+
+1. Download `BWLArchipelago.dll` from the [releases page](https://github.com/YourName/BWLArchipelago/releases).
+2. Copy `BWLArchipelago.dll` into your `BepInEx/plugins` folder:
+   ```
+   Before We Leave/BepInEx/plugins/BWLArchipelago.dll
+   ```
+3. Launch the game. A connection screen will appear on the main menu.
+
+### Step 3: Install the APworld
+
+1. Download `before_we_leave.apworld` from the [releases page](https://github.com/YourName/BWLArchipelago/releases).
+2. Copy it into your Archipelago custom worlds folder:
+   ```
+   C:\ProgramData\Archipelago\custom_worlds\before_we_leave.apworld
+   ```
+   If the `custom_worlds` folder does not exist, create it.
+
+---
+
+## Setting Up a Multiworld
+
+### Step 1: Create Your YAML
+
+1. Download `testPlayer.yaml` from this repository as a template.
+2. Edit the following fields:
+   - `name` — your player name as it will appear in the multiworld
+   - `win_condition` — set your preferred win condition (see options below)
+   - `planets_to_colonize` — only relevant for `colonize_planets` and `complete_game` win conditions
+3. Submit your YAML to the Archipelago website or share it with your multiworld host.
+
+### Win Condition Options
+
+| Option | Value | Description |
+|--------|-------|-------------|
+| Launch Rocket | `launch_rocket: 50` | Launch your first rocket. Short game. |
+| Colonize Planets | `colonize_planets: 50` | Colonize a set number of planets. Medium game. |
+| Complete Game | `complete_game: 50` | Charm the large space whale with a fully upgraded WhaleCharmer. Long game. |
+
+### Step 2: Generate the Multiworld
+
+Generate your multiworld using the Archipelago website or local generator. Once generated, start the Archipelago server.
+
+### Step 3: Connect In-Game
+
+1. Launch Before We Leave.
+2. The Archipelago Connection screen will appear on the main menu.
+3. Enter your connection details:
+   - **Server** — the Archipelago server address (e.g. `archipelago.gg` or a custom host)
+   - **Port** — the port number provided by your multiworld host
+   - **Slot Name** — your player name exactly as entered in your YAML
+   - **Password** — leave blank if the server has no password
+4. Click **Connect**. The mod will connect to the server and begin syncing.
+5. Click **Play Offline** if you want to play without Archipelago for this session.
+
+Your connection details are saved automatically and will pre-populate next time you launch.
+
+---
+
+## Progressive Technology Groups
+
+The following technologies are grouped into progressive chains. You must receive earlier items in the chain before later ones are granted:
+
+| Group | Technologies (in order) |
+|-------|------------------------|
+| Progressive Housing | House → School → Apartment |
+| Progressive Mining | Mining → Metalwork → Glass → Laser |
+| Progressive Elevator | Elevator → SpaceElevator |
+| Progressive Power | Repair → Power → OilPower → CleanPower |
+| Progressive Happiness | Pump → Music → MeetingSquare → RoadDecoration |
+| Progressive Food | Gardening → Cooking → Farming → Baking |
+| Progressive Upgrades | Tinkering → Automation → Filtering |
+| Progressive Rocket | Fuel → Space |
+| Progressive Shipping | Shipping → AdvancedShipping → Airships |
+
+---
+
+## Troubleshooting
+
+**The connection screen doesn't appear**
+- Make sure BepInEx is installed correctly and the mod DLL is in the `plugins` folder.
+- Check `BepInEx/LogOutput.log` for any errors on startup.
+
+**Connection fails**
+- Double check your server address, port, and slot name.
+- Make sure the Archipelago server is running.
+- Check that your slot name exactly matches what was used in your YAML (case sensitive).
+
+**A technology wasn't granted**
+- Check `BepInEx/LogOutput.log` for any warnings about unknown technology names.
+- Some technologies may have name mismatches between the APworld and the game. Report these as issues on the GitHub page.
+
+**The library timer gets stuck**
+- This should not happen in the current version. If it does, cancel the current research and re-queue it.
+- Check `BepInEx/LogOutput.log` and report the issue on GitHub.
+
+---
+
+## Building From Source
+
+1. Clone this repository.
+2. Open `BWLArchipelago.csproj` in Visual Studio or Rider.
+3. Update the reference paths in the `.csproj` file to point to your local BepInEx and Before We Leave managed DLL folders.
+4. Build in Release configuration. The output DLL will be in `bin/Release`.
+
+---
+
+## Contributing
+
+Bug reports and pull requests are welcome. Please open an issue on GitHub before making large changes.
+
+---
+
+## License
+
+MIT License. See `LICENSE` for details.

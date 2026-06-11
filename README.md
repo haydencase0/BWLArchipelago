@@ -4,18 +4,6 @@ A [BepInEx](https://github.com/BepInEx/BepInEx) mod that integrates Before We Le
 
 ---
 
-## What Does It Do?
-
-- **Sending checks:** When you research a technology in the library, the mod sends that location check to the Archipelago server.
-- **Receiving items:** When you receive a technology item from Archipelago (from yourself or another player), the mod grants that technology as a building unlock without awarding a checkmark.
-- **Progressive items:** Some technologies are grouped into progressive chains (e.g. Progressive Mining unlocks Mining → Metalwork → Glass → Laser in order) so you can never receive a high-level tech before the lower-level ones.
-- **Win conditions:** The mod supports three win conditions configurable in your YAML:
-  - **Launch Rocket** — launch your first rocket (short game)
-  - **Colonize Planets** — colonize a set number of planets (medium game)
-  - **Complete Game** — charm the large space whale with a fully upgraded WhaleCharmer (long game)
-
----
-
 ## Requirements
 
 - Before We Leave (Steam)
@@ -61,7 +49,7 @@ A [BepInEx](https://github.com/BepInEx/BepInEx) mod that integrates Before We Le
 
 ### Step 1: Create Your YAML
 
-1. Download `testPlayer.yaml` from this repository as a template.
+1. Download `before we leave.yaml` from this repository as a template.
 2. Edit the following fields:
    - `name` — your player name as it will appear in the multiworld
    - `win_condition` — set your preferred win condition (see options below)
@@ -74,7 +62,7 @@ A [BepInEx](https://github.com/BepInEx/BepInEx) mod that integrates Before We Le
 |--------|-------|-------------|
 | Launch Rocket | `launch_rocket: 50` | Launch your first rocket. Short game. |
 | Colonize Planets | `colonize_planets: 50` | Colonize a set number of planets. Medium game. |
-| Complete Game | `complete_game: 50` | Charm the large space whale with a fully upgraded WhaleCharmer. Long game. |
+| Complete Game | `complete_game: 50` | See the end game scene. Long game. |
 
 ### Step 2: Generate the Multiworld
 
@@ -127,11 +115,7 @@ The following technologies are grouped into progressive chains. You must receive
 
 **A technology wasn't granted**
 - Check `BepInEx/LogOutput.log` for any warnings about unknown technology names.
-- Some technologies may have name mismatches between the APworld and the game. Report these as issues on the GitHub page.
-
-**The library timer gets stuck**
-- This should not happen in the current version. If it does, cancel the current research and re-queue it.
-- Check `BepInEx/LogOutput.log` and report the issue on GitHub.
+- Some technologies may have name mismatches between the APworld and the game. Report these as issues on the GitHub page or on Discord.
 
 ---
 
@@ -146,10 +130,4 @@ The following technologies are grouped into progressive chains. You must receive
 
 ## Contributing
 
-Bug reports and pull requests are welcome. Please open an issue on GitHub before making large changes.
-
----
-
-## License
-
-MIT License. See `LICENSE` for details.
+Bug reports and pull requests are welcome. Please open an issue on GitHub or message me on Discord.

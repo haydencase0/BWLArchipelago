@@ -27,16 +27,18 @@ A [BepInEx](https://github.com/BepInEx/BepInEx) mod that integrates Before We Le
 
 ### Step 2: Install the Mod
 
-1. Download `BWLArchipelago.dll` from the [releases page](https://github.com/YourName/BWLArchipelago/releases).
-2. Copy `BWLArchipelago.dll` into your `BepInEx/plugins` folder:
+1. Download `plugins.zip` from the [releases page](https://github.com/haydencase0/BWLArchipelago/releases).
+2. Extract `plugins.zip` into your `BepInEx/plugins` folder:
    ```
    Before We Leave/BepInEx/plugins/BWLArchipelago.dll
+                                  /Archipelago.MultiClient.Net.dll
+                                  /Newtonsoft.Json.dll
    ```
 3. Launch the game. A connection screen will appear on the main menu.
 
 ### Step 3: Install the APworld
 
-1. Download `before_we_leave.apworld` from the [releases page](https://github.com/YourName/BWLArchipelago/releases).
+1. Download `before_we_leave.apworld` from the [releases page](https://github.com/haydencase0/BWLArchipelago/releases).
 2. Copy it into your Archipelago custom worlds folder:
    ```
    C:\ProgramData\Archipelago\custom_worlds\before_we_leave.apworld
@@ -105,7 +107,7 @@ The following technologies are grouped into progressive chains. You must receive
 ## Troubleshooting
 
 **The connection screen doesn't appear**
-- Make sure BepInEx is installed correctly and the mod DLL is in the `plugins` folder.
+- Make sure BepInEx is installed correctly and the mod DLLs are in the `plugins` folder.
 - Check `BepInEx/LogOutput.log` for any errors on startup.
 
 **Connection fails**
@@ -150,7 +152,7 @@ Steps
    - Unity.TextMeshPro.dll — from Before We Leave_Data\Managed\
    - MonoMod.RuntimeDetour.dll — from BepInEx\core\
    - MonoMod.Utils.dll — from BepInEx\core\
-5. Build in Release configuration. The output DLL will be in bin/Release.
+5. Build in Release configuration. The output DLLs will be in bin\Release\net472.
 
 ---
 

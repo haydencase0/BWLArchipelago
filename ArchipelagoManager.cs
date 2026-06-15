@@ -4,8 +4,11 @@ using Archipelago.MultiClient.Net.Helpers;
 using Archipelago.MultiClient.Net.Models;
 using BepInEx.Logging;
 using HarmonyLib;
+using Newtonsoft.Json;
+using Planet;
 using System;
 using System.Collections.Generic;
+using System.IO;
 using System.Reflection;
 
 namespace BWLArchipelago
@@ -22,79 +25,61 @@ namespace BWLArchipelago
         // Session
         private static ArchipelagoSession session;
 
-        // State
+        // State flags
         public static bool IsConnected = false;
-
-        // Set to true while GrantTechnology is calling AddResearchedTechnology,
-        // so AddResearchedTechnologyPatch lets it through.
         public static bool IsGrantingTechnology = false;
-
-        // Set to true while AddResearchedTechnology is running for a player-checked tech.
-        // EvaluateAvailableBuildings, EvaluateBuildingButtons, and
-        // EvaluateAvailableBuildingCards are all skipped in this context so
-        // buildings only unlock from AP grants, not from player checks.
         public static bool IsCompletingPlayerCheck = false;
-
-        // Set to true while StartResearchAction.IsValid is running so
-        // HasResearchedTechnologyPatch can intercept prerequisite checks.
         public static bool IsCheckingResearchValidity = false;
-
-        // The tech currently being validated by StartResearchAction.IsValid.
-        // HasResearchedTechnologyPatch skips this tech so it isn't blocked
-        // as "already researched" when the player is trying to research it.
         public static string CurrentlyValidatingTech = null;
 
-        // Technologies received from AP but not yet granted (game not loaded yet,
-        // or library was busy researching when the item arrived).
+        // Pending items
         private static List<string> pendingUnlocks = new List<string>();
-
-        // Checks that couldn't be sent because AP wasn't connected yet.
         private static List<string> pendingChecks = new List<string>();
-
-        // Technologies the player has successfully sent as AP location checks.
-        // Drives checkmark display and prerequisite satisfaction.
-        private static HashSet<string> researchedTechnologies = new HashSet<string>();
-
-        // Technologies successfully granted to the player via AP.
-        // Tracked to avoid granting the same tech twice.
-        // Also used by EvaluateAvailableBuildingsPatch to keep buildings unlocked.
-        private static HashSet<string> grantedTechnologies = new HashSet<string>();
-
-        // Techs the player has queued for research but library hasn't finished yet.
-        // Prevents duplicate checks if the player clicks Research multiple times.
-        private static HashSet<string> queuedResearches = new HashSet<string>();
-
-        private static List<(string resourceName, int amount)> pendingResourceGrants 
+        private static List<(string resourceName, int amount)> pendingResourceGrants
             = new List<(string, int)>();
 
-        // Maps AP item names to internal game technology names where they differ.
-        private static readonly Dictionary<string, string> itemNameToTechName
-            = new Dictionary<string, string>
-            {
-                // Add mappings here as you discover mismatches between AP and the game.
-                // Example: { "Farm", "Gardening" },
-            };
+        // Tracked state - persisted to disk
+        private static HashSet<string> researchedTechnologies = new HashSet<string>();
+        private static HashSet<string> grantedTechnologies = new HashSet<string>();
+        private static HashSet<string> queuedResearches = new HashSet<string>();
+        private static HashSet<string> sentChecks = new HashSet<string>();
 
-        // Maps progressive AP item names to an ordered list of game tech names.
-        // Each time a progressive item is received, the next ungranted tech in the
-        // list is granted. This prevents players from getting stuck behind high-level
-        // techs they can't use yet.
+        // Progressive technology groups - ordered lists of tech names.
+        // Each time a progressive item is received, the next ungranted tech
+        // in the list is granted.
         private static readonly Dictionary<string, List<string>> progressiveTechGroups
             = new Dictionary<string, List<string>>
-            {
-                { "Progressive Housing", new List<string> { "House", "School", "Apartment" } },
-                { "Progressive Mining", new List<string> { "Mining", "Metalwork", "Glass", "Laser" } },
-                { "Progressive Elevator", new List<string> { "Elevator", "SpaceElevator" } },
-                { "Progressive Power", new List<string> { "Repair", "Power", "OilPower", "CleanPower" } },
-                { "Progressive Happiness", new List<string> { "Pump", "Music", "MeetingSquare" } },
-                { "Progressive Food", new List<string> { "Gardening", "Cooking", "Farming", "Baking" } },
-                { "Progressive Upgrade", new List<string> { "Tinkering", "Automation", "Filtering" } },
-                { "Progressive Rocket", new List<string> { "Fuel", "Space" } },
-                { "Progressive Shipping", new List<string> { "Shipping", "AdvancedShipping", "Airships" } }
-            };
+        {
+            { "Progressive Housing", new List<string> { "House", "School", "Apartment" } },
+            { "Progressive Mining", new List<string> { "Mining", "Metalwork", "Glass", "Laser" } },
+            { "Progressive Elevator", new List<string> { "Elevator", "SpaceElevator" } },
+            { "Progressive Power", new List<string> { "Repair", "Power", "OilPower", "CleanPower" } },
+            { "Progressive Happiness", new List<string> { "Pump", "Music", "MeetingSquare", "RoadDecoration" } },
+            { "Progressive Food", new List<string> { "Gardening", "Cooking", "Farming", "Baking" } },
+            { "Progressive Upgrades", new List<string> { "Tinkering", "Automation", "Filtering" } },
+            { "Progressive Rocket", new List<string> { "Fuel", "Space" } },
+            { "Progressive Shipping", new List<string> { "Shipping", "AdvancedShipping", "Airships" } },
+        };
 
-        // Logger reference
+        // Resource grant items - maps AP item name to resource name and amount
+        private static readonly Dictionary<string, (string resourceName, int amount)> resourceGrants
+            = new Dictionary<string, (string, int)>
+        {
+            { "10 Stone", ("Stone", 10) },
+        };
+
+        // Logger
         private static ManualLogSource Log;
+
+        // Save data class for JSON serialization
+        [Serializable]
+        private class ArchipelagoSaveData
+        {
+            public List<string> ResearchedTechnologies = new List<string>();
+            public List<string> GrantedTechnologies = new List<string>();
+            public List<string> QueuedResearches = new List<string>();
+            public List<string> SentChecks = new List<string>();
+        }
 
         public static void Initialize(ManualLogSource log)
         {
@@ -102,8 +87,141 @@ namespace BWLArchipelago
             Log.LogInfo("ArchipelagoManager initialized.");
         }
 
-        // Connects to the AP server using the current ServerUrl, ServerPort,
-        // SlotName, and Password values. Returns true on success.
+        // Returns the path for the Archipelago companion save file.
+        // Uses the game's unique save ID so each save slot has its own file.
+        private static string GetSaveFilePath()
+        {
+            try
+            {
+                FieldInfo uniqueIdField = AccessTools.Field(
+                    AccessTools.TypeByName("GameManager"), "uniqueGameId"
+                );
+                string uniqueId = uniqueIdField?.GetValue(null) as string;
+
+                PropertyInfo savePathProp = AccessTools.Property(
+                    AccessTools.TypeByName("AppData"), "GameSavePath"
+                );
+                string savePath = savePathProp?.GetValue(null) as string;
+
+                if (string.IsNullOrEmpty(uniqueId) || string.IsNullOrEmpty(savePath))
+                    return null;
+
+                return Path.Combine(savePath, "archipelago.json");
+            }
+            catch (Exception ex)
+            {
+                Log.LogError("Error getting save file path: " + ex.Message);
+                return null;
+            }
+        }
+
+        // Saves our state to a JSON file alongside the game save.
+        public static void SaveArchipelagoState()
+        {
+            try
+            {
+                string path = GetSaveFilePath();
+                if (path == null)
+                {
+                    Log.LogWarning("Could not determine save file path - state not saved.");
+                    return;
+                }
+
+                ArchipelagoSaveData data = new ArchipelagoSaveData
+                {
+                    ResearchedTechnologies = new List<string>(researchedTechnologies),
+                    GrantedTechnologies = new List<string>(grantedTechnologies),
+                    QueuedResearches = new List<string>(queuedResearches),
+                    SentChecks = new List<string>(sentChecks)
+                };
+
+                string json = JsonConvert.SerializeObject(data, Formatting.Indented);
+                File.WriteAllText(path, json);
+                Log.LogInfo("Archipelago state saved to: " + path);
+            }
+            catch (Exception ex)
+            {
+                Log.LogError("Error saving Archipelago state: " + ex.Message);
+            }
+        }
+
+        // Loads our state from the companion save file.
+        // Called before ReadyToStartGame fires so state is ready when AP replays items.
+        public static void LoadArchipelagoState()
+        {
+            try
+            {
+                string path = GetSaveFilePath();
+                if (path == null || !File.Exists(path))
+                {
+                    Log.LogInfo("No Archipelago save file found - starting fresh.");
+                    return;
+                }
+
+                string json = File.ReadAllText(path);
+                ArchipelagoSaveData data = JsonConvert.DeserializeObject<ArchipelagoSaveData>(json);
+
+                if (data == null)
+                {
+                    Log.LogWarning("Failed to deserialize Archipelago save data.");
+                    return;
+                }
+
+                researchedTechnologies = new HashSet<string>(
+                    data.ResearchedTechnologies ?? new List<string>()
+                );
+                grantedTechnologies = new HashSet<string>(
+                    data.GrantedTechnologies ?? new List<string>()
+                );
+                queuedResearches = new HashSet<string>(
+                    data.QueuedResearches ?? new List<string>()
+                );
+                sentChecks = new HashSet<string>(
+                    data.SentChecks ?? new List<string>()
+                );
+
+                Log.LogInfo(
+                    "Archipelago state loaded - Researched: " + researchedTechnologies.Count +
+                    " | Granted: " + grantedTechnologies.Count +
+                    " | Queued: " + queuedResearches.Count +
+                    " | Sent checks: " + sentChecks.Count
+                );
+            }
+            catch (Exception ex)
+            {
+                Log.LogError("Error loading Archipelago state: " + ex.Message);
+            }
+        }
+
+        // Triggers a fresh EvaluateAvailableBuildings on all colonized islands
+        // so buildings unlocked by AP grants are available after load.
+        public static void RefreshAvailableBuildings()
+        {
+            try
+            {
+                foreach (Entity entity in GameManager.EntityManager
+                    .GetEntitiesOfType(EntityType.Planet))
+                {
+                    if (!entity.Enabled) continue;
+                    PlanetComponent planet = entity.GetPlanet();
+                    if (planet == null) continue;
+
+                    for (int i = 0; i < planet.islands.Count; i++)
+                    {
+                        PlanetIsland island = planet.islands[i];
+                        if (island.owningPlayer != null)
+                            island.EvaluateAvailableBuildings(true, false);
+                    }
+                }
+
+                Log.LogInfo("Available buildings refreshed.");
+            }
+            catch (Exception ex)
+            {
+                Log.LogError("Error refreshing available buildings: " + ex.Message);
+            }
+        }
+
         public static bool Connect()
         {
             Log.LogInfo(
@@ -129,7 +247,6 @@ namespace BWLArchipelago
                 IsConnected = true;
                 Log.LogInfo("Connected to Archipelago successfully!");
 
-                // Flush any checks that were queued while disconnected
                 if (pendingChecks.Count > 0)
                 {
                     Log.LogInfo("Flushing " + pendingChecks.Count + " pending checks.");
@@ -161,7 +278,6 @@ namespace BWLArchipelago
             }
         }
 
-        // Called by StartResearchExecutePatch when the player queues a research.
         public static void SendCheck(string locationName)
         {
             string techName = locationName.Replace("Researched ", "");
@@ -180,11 +296,16 @@ namespace BWLArchipelago
 
         private static void SendCheckInternal(string locationName)
         {
+            if (sentChecks.Contains(locationName))
+            {
+                Log.LogInfo("Check already sent, skipping: " + locationName);
+                return;
+            }
+
             Log.LogInfo("Sending check: " + locationName);
 
             long locationId = session.Locations.GetLocationIdFromName(
-                GameName,
-                locationName
+                GameName, locationName
             );
 
             if (locationId < 0)
@@ -194,17 +315,16 @@ namespace BWLArchipelago
             }
 
             session.Locations.CompleteLocationChecks(locationId);
+            sentChecks.Add(locationName);
             Log.LogInfo("Check sent: " + locationName);
         }
 
-        // Called by DequeueTechnologyPatch when the library finishes a player-queued research.
         public static void MarkTechnologyResearched(string techName)
         {
             researchedTechnologies.Add(techName);
             Log.LogInfo("Marked as researched (checkmark): " + techName);
         }
 
-        // Called by CancelResearchExecutePatch when the player cancels a research.
         public static void CancelResearch(string techName)
         {
             queuedResearches.Remove(techName);
@@ -212,22 +332,17 @@ namespace BWLArchipelago
         }
 
         public static bool IsResearchQueued(string techName)
-        {
-            return queuedResearches.Contains(techName);
-        }
+            => queuedResearches.Contains(techName);
 
         public static bool IsTechnologyResearched(string techName)
-        {
-            return researchedTechnologies.Contains(techName);
-        }
+            => researchedTechnologies.Contains(techName);
 
         public static bool IsTechnologyGranted(string techName)
-        {
-            return grantedTechnologies.Contains(techName);
-        }
+            => grantedTechnologies.Contains(techName);
 
-        // Temporarily adds all granted techs to the game's researchedTechnologies set
-        // so EvaluateAvailableBuildings sees them and keeps buildings unlocked.
+        public static bool IsCheckSent(string locationName)
+            => sentChecks.Contains(locationName);
+
         public static void AddGrantedTechsToResearched()
         {
             object[] context = GetPlayerAndTechManager();
@@ -247,16 +362,12 @@ namespace BWLArchipelago
 
             foreach (string techName in grantedTechnologies)
             {
-                object techDef = getTechnology?.Invoke(
-                    techManager, new object[] { techName }
-                );
+                object techDef = getTechnology?.Invoke(techManager, new object[] { techName });
                 if (techDef != null)
                     addMethod?.Invoke(researchedSet, new object[] { techDef });
             }
         }
 
-        // Removes all granted techs from the game's researchedTechnologies set
-        // after EvaluateAvailableBuildings has run.
         public static void RemoveGrantedTechsFromResearched()
         {
             object[] context = GetPlayerAndTechManager();
@@ -276,15 +387,12 @@ namespace BWLArchipelago
 
             foreach (string techName in grantedTechnologies)
             {
-                object techDef = getTechnology?.Invoke(
-                    techManager, new object[] { techName }
-                );
+                object techDef = getTechnology?.Invoke(techManager, new object[] { techName });
                 if (techDef != null)
                     removeMethod?.Invoke(researchedSet, new object[] { techDef });
             }
         }
 
-        // Shared helper to get player and tech manager via reflection.
         private static object[] GetPlayerAndTechManager()
         {
             Type gameControllerType = AccessTools.TypeByName("GameController");
@@ -296,9 +404,7 @@ namespace BWLArchipelago
             object playerView = getSinglePlayerView?.Invoke(null, null);
             if (playerView == null) return null;
 
-            PropertyInfo playerProp = AccessTools.Property(
-                playerView.GetType(), "Player"
-            );
+            PropertyInfo playerProp = AccessTools.Property(playerView.GetType(), "Player");
             object player = playerProp?.GetValue(playerView, null);
             if (player == null) return null;
 
@@ -318,8 +424,6 @@ namespace BWLArchipelago
             return new object[] { player, techManager, getTechnology };
         }
 
-        // Returns true if any library is currently researching a technology.
-        // Used by GrantTechnology to defer grants until research completes.
         private static bool IsAnyLibraryBusy()
         {
             try
@@ -333,15 +437,10 @@ namespace BWLArchipelago
                         return true;
                 }
             }
-            catch
-            {
-                // EntityManager may not be ready yet - treat as not busy
-            }
+            catch { }
             return false;
         }
 
-        // Called when the game finishes loading, and by DequeueTechnologyPatch
-        // after each research completes to flush deferred grants.
         public static void OnGameReady()
         {
             Log.LogInfo("Game ready. Flushing " + pendingUnlocks.Count + " pending unlocks.");
@@ -351,6 +450,52 @@ namespace BWLArchipelago
 
             foreach (string techName in toGrant)
                 GrantTechnology(techName);
+
+            // Flush pending resource grants
+            FlushPendingResourceGrants();
+
+            // Re-evaluate buildings after all grants are applied so buildings
+            // unlocked by AP grants are available after loading a save
+            RefreshAvailableBuildings();
+        }
+
+        private static void FlushPendingResourceGrants()
+        {
+            if (pendingResourceGrants.Count == 0) return;
+
+            List<(string, int)> toGrant = new List<(string, int)>(pendingResourceGrants);
+            pendingResourceGrants.Clear();
+
+            foreach (var (resourceName, amount) in toGrant)
+                GrantResource(resourceName, amount);
+        }
+
+        private static void GrantResource(string resourceName, int amount)
+        {
+            foreach (Entity entity in GameManager.EntityManager
+                .GetEntitiesWithComponent(EntityComponentType.Storage))
+            {
+                if (!entity.Enabled) continue;
+                BuildingComponent building = entity.GetBuilding();
+                if (building == null) continue;
+                if (!building.BuildingIsWarehouseOrStorageHub()) continue;
+
+                StorageComponent storage = entity.GetStorage();
+                if (storage == null) continue;
+
+                ResourceStorage resource = storage.GetIncomingResourceByName(resourceName);
+                if (resource != null)
+                {
+                    resource.Store(amount, false, false);
+                    Log.LogInfo("Granted " + amount + " " + resourceName +
+                        " to " + building.Name);
+                    return;
+                }
+            }
+
+            Log.LogInfo("No warehouse found - deferring resource grant: " +
+                amount + " " + resourceName);
+            pendingResourceGrants.Add((resourceName, amount));
         }
 
         private static void OnItemReceived(ReceivedItemsHelper helper)
@@ -363,17 +508,16 @@ namespace BWLArchipelago
                 Log.LogInfo("Item received from Archipelago: " + itemName);
 
                 // Check for resource grant items
-                if (itemName == "10 Stone")
+                if (resourceGrants.TryGetValue(itemName, out var grant))
                 {
                     Log.LogInfo("Resource item received: " + itemName);
-                    GrantResource("Stone", 10);
+                    GrantResource(grant.resourceName, grant.amount);
                     continue;
                 }
 
-                // Check if this is a progressive item first
+                // Check for progressive items
                 if (progressiveTechGroups.TryGetValue(itemName, out List<string> techList))
                 {
-                    // Find the first tech in the list not yet granted
                     bool found = false;
                     foreach (string techName in techList)
                     {
@@ -388,6 +532,7 @@ namespace BWLArchipelago
                             break;
                         }
                     }
+
                     if (!found)
                     {
                         Log.LogWarning(
@@ -395,22 +540,16 @@ namespace BWLArchipelago
                             itemName
                         );
                     }
+
                     continue;
                 }
 
-                // Non-progressive item - strip " Technology" suffix and apply name
-                // mapping if one exists, then grant directly
+                // Non-progressive item - strip " Technology" suffix and grant
                 string singleTechName = itemName;
                 if (singleTechName.EndsWith(" Technology"))
                     singleTechName = singleTechName.Substring(
                         0, singleTechName.Length - " Technology".Length
                     );
-
-                if (itemNameToTechName.TryGetValue(singleTechName, out string mappedName))
-                {
-                    Log.LogInfo("Mapped '" + singleTechName + "' to '" + mappedName + "'");
-                    singleTechName = mappedName;
-                }
 
                 GrantTechnology(singleTechName);
             }
@@ -524,46 +663,9 @@ namespace BWLArchipelago
             Log.LogInfo("Remove result for " + techName + ": " + wasRemoved);
 
             Log.LogInfo("Technology granted: " + techName);
-        }
 
-        private static void GrantResource(string resourceName, int amount)
-        {
-            foreach (Entity entity in GameManager.EntityManager
-                .GetEntitiesWithComponent(EntityComponentType.Storage))
-            {
-                if (!entity.Enabled) continue;
-                BuildingComponent building = entity.GetBuilding();
-                if (building == null) continue;
-                if (!building.BuildingIsWarehouseOrStorageHub()) continue;
-
-                StorageComponent storage = entity.GetStorage();
-                if (storage == null) continue;
-
-                ResourceStorage resource = storage.GetIncomingResourceByName(resourceName);
-                if (resource != null)
-                {
-                    resource.Store(amount, false, false);
-                    Log.LogInfo("Granted " + amount + " " + resourceName +
-                        " to " + building.Name);
-                    return;
-                }
-            }
-
-            // No warehouse available yet - defer until one is built
-            Log.LogInfo("No warehouse found - deferring resource grant: " +
-                amount + " " + resourceName);
-            pendingResourceGrants.Add((resourceName, amount));
-        }
-
-        public static void FlushPendingResourceGrants()
-        {
-            if (pendingResourceGrants.Count == 0) return;
-
-            List<(string, int)> toGrant = new List<(string, int)>(pendingResourceGrants);
-            pendingResourceGrants.Clear();
-
-            foreach (var (resourceName, amount) in toGrant)
-                GrantResource(resourceName, amount);
+            // Flush any pending resource grants now that a tech was granted
+            FlushPendingResourceGrants();
         }
 
         private static void OnError(Exception exception, string message)

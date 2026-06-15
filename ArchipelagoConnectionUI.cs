@@ -62,12 +62,6 @@ namespace BWLArchipelago
             if (!isVisible) return;
             if (!Application.isPlaying) return;
 
-            if (mainMenuObject != null)
-            {
-                BWLArchipelagoPlugin.Log.LogInfo(
-                    "MainMenu active: " + mainMenuObject.activeInHierarchy
-                );
-            }
             // Hide when the main menu canvas deactivates (e.g. during quit fade)
             if (mainMenuObject != null && !mainMenuObject.activeInHierarchy)
             {

@@ -15,9 +15,6 @@ namespace BWLArchipelago
     {
         internal static ManualLogSource Log;
 
-        // Config entries for remembering last used connection details.
-        // These are pre-populated in the UI so the player doesn't have to
-        // retype them every launch.
         internal static ConfigEntry<string> ConfigServerUrl;
         internal static ConfigEntry<int> ConfigServerPort;
         internal static ConfigEntry<string> ConfigSlotName;
@@ -366,24 +363,6 @@ namespace BWLArchipelago
                 Log.LogInfo("Patch applied: TechnologyDetails.Update_Internal.");
             }
 
-            Type playerType2 = AccessTools.TypeByName("Player");
-            MethodInfo addRecordTarget = AccessTools.Method(
-                playerType2, "AddRecord",
-                new Type[] { typeof(string) }
-            );
-
-            if (addRecordTarget != null)
-            {
-                harmony.Patch(
-                    addRecordTarget,
-                    postfix: new HarmonyMethod(
-                        typeof(PlayerAddRecordPatch),
-                        nameof(PlayerAddRecordPatch.Postfix)
-                    )
-                );
-                Log.LogInfo("Patch applied: Player.AddRecord.");
-            }
-
             // --- Patch 14: ReadyToStartGame ---
             MethodInfo readyToStartTarget = AccessTools.Method(
                 typeof(GameController), "ReadyToStartGame"
@@ -405,28 +384,81 @@ namespace BWLArchipelago
                 Log.LogInfo("Patch applied: ReadyToStartGame.");
             }
 
-            // Patch 15: LaunchSpaceShipAction.Execute
-            // Sends the goal check when the player launches their first rocket.
-            // Uses HasRecord("LaunchedSpaceship") to ensure it only fires once.
-
-            MethodInfo launchSpaceshipTarget = AccessTools.Method(
-                typeof(LaunchSpaceshipAction), "Execute"
+            // --- Patch 15: Player.AddRecord ---
+            // Sends goal checks for game completion events.
+            MethodInfo addRecordTarget = AccessTools.Method(
+                playerType, "AddRecord",
+                new Type[] { typeof(string) }
             );
 
-            if (launchSpaceshipTarget != null)
+            if (addRecordTarget != null)
             {
                 harmony.Patch(
-                    launchSpaceshipTarget,
+                    addRecordTarget,
                     postfix: new HarmonyMethod(
-                        typeof(LaunchSpaceShipPatch),
-                        nameof(LaunchSpaceShipPatch.Postfix)
+                        typeof(PlayerAddRecordPatch),
+                        nameof(PlayerAddRecordPatch.Postfix)
                     )
                 );
-                Log.LogInfo("Patch applied: LaunchSpaceShipAction.Execute.");
+                Log.LogInfo("Patch applied: Player.AddRecord.");
             }
 
-            // Create the connection UI - player connects via in-game screen
-            // instead of editing config files. Defined in ArchipelagoConnectionUI.cs.
+            // --- Patch 16: LaunchSpaceShipAction.Execute ---
+            //MethodInfo launchSpaceshipTarget = AccessTools.Method(
+            //    typeof(LaunchSpaceShipAction), "Execute"
+            //);
+
+            //if (launchSpaceshipTarget != null)
+            //{
+            //    harmony.Patch(
+            //        launchSpaceshipTarget,
+            //        postfix: new HarmonyMethod(
+            //            typeof(LaunchSpaceShipPatch),
+            //            nameof(LaunchSpaceShipPatch.Postfix)
+            //        )
+            //    );
+            //    Log.LogInfo("Patch applied: LaunchSpaceShipAction.Execute.");
+            //}
+
+            // --- Patch 17: GameManager.SaveGame ---
+            // Saves our Archipelago state alongside the game save.
+            MethodInfo saveGameTarget = AccessTools.Method(
+                AccessTools.TypeByName("GameManager"), "SaveGame",
+                new Type[] { typeof(string) }
+            );
+
+            if (saveGameTarget != null)
+            {
+                harmony.Patch(
+                    saveGameTarget,
+                    postfix: new HarmonyMethod(
+                        typeof(SaveGamePatch),
+                        nameof(SaveGamePatch.Postfix)
+                    )
+                );
+                Log.LogInfo("Patch applied: GameManager.SaveGame.");
+            }
+
+            // --- Patch 18: GameController.PostLoad ---
+            // Restores our Archipelago state when a save is loaded,
+            // before ReadyToStartGame fires.
+            MethodInfo postLoadTarget = AccessTools.Method(
+                typeof(GameController), "PostLoad"
+            );
+
+            if (postLoadTarget != null)
+            {
+                harmony.Patch(
+                    postLoadTarget,
+                    prefix: new HarmonyMethod(
+                        typeof(PostLoadPatch),
+                        nameof(PostLoadPatch.Prefix)
+                    )
+                );
+                Log.LogInfo("Patch applied: GameController.PostLoad.");
+            }
+
+            // Create the connection UI - defined in ArchipelagoConnectionUI.cs
             var uiObject = new GameObject("ArchipelagoConnectionUI");
             GameObject.DontDestroyOnLoad(uiObject);
             uiObject.AddComponent<ArchipelagoConnectionUI>();
@@ -436,7 +468,6 @@ namespace BWLArchipelago
     }
 
     // Patch 1: Sends the AP check when the player queues a research.
-    // Postfix logs state after Execute for debugging.
     public static class StartResearchExecutePatch
     {
         public static bool Prefix(StartResearchAction __instance)
@@ -492,9 +523,7 @@ namespace BWLArchipelago
     }
 
     // Patch 2: Prefix sets IsCompletingPlayerCheck for non-AP calls.
-    // Postfix removes tech from researchedTechnologies after the original runs
-    // so buildings don't unlock from player checks.
-    // The original runs fully so library queue transitions work correctly.
+    // Postfix removes tech from researchedTechnologies after the original runs.
     public static class AddResearchedTechnologyPatch
     {
         public static void Prefix(
@@ -567,9 +596,7 @@ namespace BWLArchipelago
         }
     }
 
-    // Patch 3: Skips during player checks so buildings don't unlock.
-    // For all other calls: adds all granted techs temporarily so buildings
-    // unlocked by AP grants stay available.
+    // Patch 3: Manages granted tech visibility during EvaluateAvailableBuildings.
     public static class EvaluateAvailableBuildingsPatch
     {
         public static bool Prefix()
@@ -621,11 +648,9 @@ namespace BWLArchipelago
             if (library.ResearchingTechnologies.Count == 0) return true;
 
             TechnologyDefinition technology = library.ResearchingTechnologies[0];
-            string techName = technology.Name;
-
             BWLArchipelagoPlugin.Log.LogInfo(
-                "TaskOutputLibrary firing for: " + techName +
-                " | IsQueued: " + ArchipelagoManager.IsResearchQueued(techName)
+                "TaskOutputLibrary firing for: " + technology.Name +
+                " | IsQueued: " + ArchipelagoManager.IsResearchQueued(technology.Name)
             );
 
             return true;
@@ -633,9 +658,6 @@ namespace BWLArchipelago
     }
 
     // Patch 7: Replaces TaskOutputLibrary.IsValid prerequisite check.
-    // Uses our own IsTechnologyResearched and IsTechnologyGranted instead of
-    // HasResearchedTechnology so techs removed from researchedTechnologies
-    // still satisfy prerequisites for downstream research.
     public static class TaskOutputLibraryIsValidPatch
     {
         public static bool Prefix(Entity entity, ref bool __result)
@@ -685,8 +707,7 @@ namespace BWLArchipelago
         }
     }
 
-    // Patch 9: Prefix marks the tech as checked so the checkmark appears.
-    // Postfix flushes deferred AP grants after dequeue fully completes.
+    // Patch 9: Marks the tech as checked and flushes deferred AP grants.
     public static class DequeueTechnologyPatch
     {
         public static void Prefix(LibraryComponent __instance, TechnologyDefinition technology)
@@ -741,8 +762,7 @@ namespace BWLArchipelago
     }
 
     // Patch 11: Only active during StartResearchAction.IsValid.
-    // Returns true for player-checked techs so they satisfy prerequisites
-    // when the player tries to queue downstream research.
+    // Returns true for player-checked and granted techs so prerequisites pass.
     public static class HasResearchedTechnologyPatch
     {
         public static bool Prefix(
@@ -789,33 +809,17 @@ namespace BWLArchipelago
             if (!ArchipelagoManager.IsTechnologyResearched(techName)) return;
 
             FieldInfo doneField = AccessTools.Field(__instance.GetType(), "Done");
-            FieldInfo zoomedDoneField = AccessTools.Field(
-                __instance.GetType(), "ZoomedDone"
-            );
-            FieldInfo backgroundField = AccessTools.Field(
-                __instance.GetType(), "Background"
-            );
-            FieldInfo completeBgField = AccessTools.Field(
-                __instance.GetType(), "CompleteBackground"
-            );
+            FieldInfo zoomedDoneField = AccessTools.Field(__instance.GetType(), "ZoomedDone");
+            FieldInfo backgroundField = AccessTools.Field(__instance.GetType(), "Background");
+            FieldInfo completeBgField = AccessTools.Field(__instance.GetType(), "CompleteBackground");
             FieldInfo doneIconField = AccessTools.Field(__instance.GetType(), "DoneIcon");
             FieldInfo iconField = AccessTools.Field(__instance.GetType(), "Icon");
-            FieldInfo requirementsField = AccessTools.Field(
-                __instance.GetType(), "requirements"
-            );
-            FieldInfo timerBgField = AccessTools.Field(
-                __instance.GetType(), "TimerBackground"
-            );
-            FieldInfo zoomedTimerBgField = AccessTools.Field(
-                __instance.GetType(), "ZoomedTimerBackground"
-            );
+            FieldInfo requirementsField = AccessTools.Field(__instance.GetType(), "requirements");
+            FieldInfo timerBgField = AccessTools.Field(__instance.GetType(), "TimerBackground");
+            FieldInfo zoomedTimerBgField = AccessTools.Field(__instance.GetType(), "ZoomedTimerBackground");
             FieldInfo buttonField = AccessTools.Field(__instance.GetType(), "button");
-            FieldInfo colourBorderField = AccessTools.Field(
-                __instance.GetType(), "ColourBorder"
-            );
-            FieldInfo colourBorderZoomedField = AccessTools.Field(
-                __instance.GetType(), "ColourBorderZoomed"
-            );
+            FieldInfo colourBorderField = AccessTools.Field(__instance.GetType(), "ColourBorder");
+            FieldInfo colourBorderZoomedField = AccessTools.Field(__instance.GetType(), "ColourBorderZoomed");
 
             object done = doneField?.GetValue(__instance);
             object zoomedDone = zoomedDoneField?.GetValue(__instance);
@@ -845,8 +849,7 @@ namespace BWLArchipelago
         }
     }
 
-    // Patch 13: For AP-granted items the player hasn't checked yet,
-    // undoes the "done" state and shows the Research button in the popup.
+    // Patch 13: For AP-granted items not yet player-checked, shows Research button.
     public static class TechnologyDetailsUpdatePatch
     {
         public static void Postfix(object __instance)
@@ -864,21 +867,11 @@ namespace BWLArchipelago
             if (!isAPGranted || isPlayerChecked) return;
 
             FieldInfo doneField = AccessTools.Field(__instance.GetType(), "Done");
-            FieldInfo researchButtonField = AccessTools.Field(
-                __instance.GetType(), "ResearchButton"
-            );
-            FieldInfo researchButtonTextField = AccessTools.Field(
-                __instance.GetType(), "ResearchButtonText"
-            );
-            FieldInfo requirementsField = AccessTools.Field(
-                __instance.GetType(), "requirements"
-            );
-            FieldInfo timeDisplayField = AccessTools.Field(
-                __instance.GetType(), "TimeDisplay"
-            );
-            FieldInfo infoBackgroundField = AccessTools.Field(
-                __instance.GetType(), "InfoBackground"
-            );
+            FieldInfo researchButtonField = AccessTools.Field(__instance.GetType(), "ResearchButton");
+            FieldInfo researchButtonTextField = AccessTools.Field(__instance.GetType(), "ResearchButtonText");
+            FieldInfo requirementsField = AccessTools.Field(__instance.GetType(), "requirements");
+            FieldInfo timeDisplayField = AccessTools.Field(__instance.GetType(), "TimeDisplay");
+            FieldInfo infoBackgroundField = AccessTools.Field(__instance.GetType(), "InfoBackground");
             FieldInfo viewField = AccessTools.Field(__instance.GetType(), "view");
             FieldInfo libraryField = AccessTools.Field(__instance.GetType(), "library");
 
@@ -917,12 +910,7 @@ namespace BWLArchipelago
 
                     string errorReason;
                     bool isValid = StartResearchAction.IsValid(
-                        (short)(int)playerId,
-                        libraryEntity,
-                        techDef,
-                        "",
-                        0,
-                        out errorReason
+                        (short)(int)playerId, libraryEntity, techDef, "", 0, out errorReason
                     );
 
                     PropertyInfo buttonProp = AccessTools.Property(
@@ -935,42 +923,6 @@ namespace BWLArchipelago
         }
     }
 
-    public static class LaunchSpaceShipPatch
-    {
-        public static void Postfix(LaunchSpaceshipAction __instance)
-        {
-            FieldInfo playerIdField = AccessTools.Field(
-                typeof(LaunchSpaceshipAction), "playerId"
-            );
-            short playerId = (short)(playerIdField?.GetValue(__instance) ?? (short)0);
-            Player player = AppData.GetPlayer(playerId);
-
-            if (player == null) return;
-
-            // HasRecord fires after AddRecord so this is true on first launch
-            if (player.HasRecord("LaunchedSpaceship"))
-            {
-                BWLArchipelagoPlugin.Log.LogInfo(
-                    "Rocket launched - sending goal check."
-                );
-                ArchipelagoManager.SendCheck("Launched Rocket");
-            }
-        }
-    }
-
-    public static class PlayerAddRecordPatch
-    {
-        public static void Postfix(object __instance, string record)
-        {
-            if (record != "FinishedWhale") return;
-
-            BWLArchipelagoPlugin.Log.LogInfo(
-                "Game complete - space whale charmed - sending goal check."
-            );
-            ArchipelagoManager.SendCheck("Game Complete");
-        }
-    }
-
     // Patch 14: Flushes pending AP grants when the game finishes loading.
     public static class ReadyToStartGamePatch
     {
@@ -978,6 +930,86 @@ namespace BWLArchipelago
         {
             BWLArchipelagoPlugin.Log.LogInfo("Game ready - flushing pending unlocks.");
             ArchipelagoManager.OnGameReady();
+        }
+    }
+
+    // Patch 15: Sends goal checks for game completion events.
+    public static class PlayerAddRecordPatch
+    {
+        public static void Postfix(object __instance, string record)
+        {
+            if (record == "LaunchedSpaceship")
+            {
+                if (!ArchipelagoManager.IsCheckSent("Launched Rocket"))
+                {
+                    BWLArchipelagoPlugin.Log.LogInfo(
+                        "Rocket launched - sending goal check."
+                    );
+                    ArchipelagoManager.SendCheck("Launched Rocket");
+                }
+            }
+            else if (record == "FinishedWhale")
+            {
+                if (!ArchipelagoManager.IsCheckSent("Game Complete"))
+                {
+                    BWLArchipelagoPlugin.Log.LogInfo(
+                        "Game complete - sending goal check."
+                    );
+                    ArchipelagoManager.SendCheck("Game Complete");
+                }
+            }
+        }
+    }
+
+    // Patch 16: Sends the rocket launch goal check.
+    //public static class LaunchSpaceShipPatch
+    //{
+    //    public static void Postfix(LaunchSpaceShipAction __instance)
+    //    {
+    //        // playerId is on the base GameAction class, not LaunchSpaceShipAction
+    //        FieldInfo playerIdField = AccessTools.Field(
+    //            __instance.GetType().BaseType, "playerId"
+    //        );
+    //        if (playerIdField == null)
+    //            playerIdField = AccessTools.Field(__instance.GetType(), "playerId");
+
+    //        short playerId = playerIdField != null
+    //            ? (short)playerIdField.GetValue(__instance)
+    //            : (short)0;
+
+    //        Player player = AppData.GetPlayer(playerId);
+    //        if (player == null) return;
+
+    //        if (player.HasRecord("LaunchedSpaceship") &&
+    //            !ArchipelagoManager.IsCheckSent("Launched Rocket"))
+    //        {
+    //            BWLArchipelagoPlugin.Log.LogInfo(
+    //                "Rocket launched - sending goal check."
+    //            );
+    //            ArchipelagoManager.SendCheck("Launched Rocket");
+    //        }
+    //    }
+    //}
+
+    // Patch 17: Saves Archipelago state when the game saves.
+    public static class SaveGamePatch
+    {
+        public static void Postfix()
+        {
+            ArchipelagoManager.SaveArchipelagoState();
+        }
+    }
+
+    // Patch 18: Restores Archipelago state when a save is loaded,
+    // before ReadyToStartGame fires.
+    public static class PostLoadPatch
+    {
+        public static void Prefix()
+        {
+            BWLArchipelagoPlugin.Log.LogInfo(
+                "PostLoad - restoring Archipelago state."
+            );
+            ArchipelagoManager.LoadArchipelagoState();
         }
     }
 }

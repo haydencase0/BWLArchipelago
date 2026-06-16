@@ -420,23 +420,23 @@ namespace BWLArchipelago
             //    Log.LogInfo("Patch applied: LaunchSpaceShipAction.Execute.");
             //}
 
-            // --- Patch 17: GameManager.SaveGame ---
-            // Saves our Archipelago state alongside the game save.
-            MethodInfo saveGameTarget = AccessTools.Method(
-                AccessTools.TypeByName("GameManager"), "SaveGame",
-                new Type[] { typeof(string) }
+            // Patch 17: GameManager.SaveToDiskThread.ThreadProc
+            // Saves our Archipelago state after the game's own save files are written.
+            MethodInfo saveToDiskTarget = AccessTools.Method(
+                AccessTools.TypeByName("GameManager+SaveToDiskThread"),
+                "ThreadProc"
             );
 
-            if (saveGameTarget != null)
+            if (saveToDiskTarget != null)
             {
                 harmony.Patch(
-                    saveGameTarget,
+                    saveToDiskTarget,
                     postfix: new HarmonyMethod(
-                        typeof(SaveGamePatch),
-                        nameof(SaveGamePatch.Postfix)
+                        typeof(SaveToDiskPatch),
+                        nameof(SaveToDiskPatch.Postfix)
                     )
                 );
-                Log.LogInfo("Patch applied: GameManager.SaveGame.");
+                Log.LogInfo("Patch applied: GameManager.SaveToDiskThread.ThreadProc.");
             }
 
             // --- Patch 18: GameController.PostLoad ---
@@ -992,7 +992,7 @@ namespace BWLArchipelago
     //}
 
     // Patch 17: Saves Archipelago state when the game saves.
-    public static class SaveGamePatch
+    public static class SaveToDiskPatch
     {
         public static void Postfix()
         {

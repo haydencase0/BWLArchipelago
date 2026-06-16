@@ -93,20 +93,39 @@ namespace BWLArchipelago
         {
             try
             {
-                FieldInfo uniqueIdField = AccessTools.Field(
-                    AccessTools.TypeByName("GameManager"), "uniqueGameId"
-                );
-                string uniqueId = uniqueIdField?.GetValue(null) as string;
+                Type gameManagerType = AccessTools.TypeByName("GameManager");
+                Type appDataType = AccessTools.TypeByName("AppData");
 
-                PropertyInfo savePathProp = AccessTools.Property(
-                    AccessTools.TypeByName("AppData"), "GameSavePath"
-                );
+                Log.LogInfo("GameManager type: " + (gameManagerType?.Name ?? "null"));
+                Log.LogInfo("AppData type: " + (appDataType?.Name ?? "null"));
+
+                FieldInfo uniqueIdField = AccessTools.Field(gameManagerType, "uniqueGameId");
+                Log.LogInfo("uniqueGameId field: " + (uniqueIdField?.Name ?? "null"));
+
+                string uniqueId = uniqueIdField?.GetValue(null) as string;
+                Log.LogInfo("uniqueGameId value: " + (uniqueId ?? "null"));
+
+                PropertyInfo savePathProp = AccessTools.Property(appDataType, "GameSavePath");
+                Log.LogInfo("GameSavePath property: " + (savePathProp?.Name ?? "null"));
+
                 string savePath = savePathProp?.GetValue(null) as string;
+                Log.LogInfo("GameSavePath value: " + (savePath ?? "null"));
 
                 if (string.IsNullOrEmpty(uniqueId) || string.IsNullOrEmpty(savePath))
+                {
+                    Log.LogWarning("uniqueId or savePath is null/empty - cannot build save path.");
                     return null;
+                }
 
-                return Path.Combine(savePath, "archipelago.json");
+                string fullPath = Path.Combine(
+                    savePath.Replace('/', Path.DirectorySeparatorChar),
+                    "archipelago.json"
+                );
+                Log.LogInfo("Archipelago save path: " + fullPath);
+
+                Directory.CreateDirectory(Path.GetDirectoryName(fullPath));
+
+                return fullPath;
             }
             catch (Exception ex)
             {

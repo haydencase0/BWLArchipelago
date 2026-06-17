@@ -34,7 +34,12 @@ A [BepInEx](https://github.com/BepInEx/BepInEx) mod that integrates Before We Le
                                   /Archipelago.MultiClient.Net.dll
                                   /Newtonsoft.Json.dll
    ```
-3. Launch the game. A connection screen will appear on the main menu.
+3. Move the Newtonsoft.Json.dll file from the plugins to this file location
+   ```
+   Before We Leave/Before We Leave_Data/managed/Newtonsoft.Json.dll
+   ```
+   It will ask to replace the file, click yes.
+5. Launch the game. A connection screen will appear on the main menu.
 
 ### Step 3: Install the APworld
 
@@ -51,7 +56,7 @@ A [BepInEx](https://github.com/BepInEx/BepInEx) mod that integrates Before We Le
 
 ### Step 1: Create Your YAML
 
-1. Download `before we leave.yaml` from this repository as a template.
+1. Download `before we leave.yaml` from the [releases page](https://github.com/haydencase0/BWLArchipelago/releases) as a template.
 2. Edit the following fields:
    - `name` — your player name as it will appear in the multiworld
    - `win_condition` — set your preferred win condition (see options below)
@@ -114,6 +119,7 @@ The following technologies are grouped into progressive chains. You must receive
 - Double check your server address, port, and slot name.
 - Make sure the Archipelago server is running.
 - Check that your slot name exactly matches what was used in your YAML (case sensitive).
+- Check that your files are downloaded in the correct locations.
 
 **A technology wasn't granted**
 - Check `BepInEx/LogOutput.log` for any warnings about unknown technology names.
@@ -158,4 +164,4 @@ Steps
 
 ## Contributing
 
-Bug reports and pull requests are welcome. Please open an issue on GitHub or message me on Discord.
+Bug reports and pull requests are welcome. Please open an issue on GitHub or message on Discord.

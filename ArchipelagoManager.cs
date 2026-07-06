@@ -31,6 +31,9 @@ namespace BWLArchipelago
         public static bool IsCompletingPlayerCheck = false;
         public static bool IsCheckingResearchValidity = false;
         public static string CurrentlyValidatingTech = null;
+        public static bool IsBlockingGrantedTechLookup = false;
+        public static bool IsEvaluatingBuildings = false;
+        public static bool IsUpdatingTechTreeUI = false;
 
         // Pending items
         private static List<string> pendingUnlocks = new List<string>();
@@ -50,7 +53,7 @@ namespace BWLArchipelago
         private static readonly Dictionary<string, List<string>> progressiveTechGroups
             = new Dictionary<string, List<string>>
         {
-            { "Progressive Housing", new List<string> { "House", "School", "Apartment" } },
+            { "Progressive Housing", new List<string> { "School", "House", "Apartment" } },
             { "Progressive Mining", new List<string> { "Mining", "Metalwork", "Glass", "Laser" } },
             { "Progressive Elevator", new List<string> { "Elevator", "SpaceElevator" } },
             { "Progressive Power", new List<string> { "Repair", "Power", "OilPower", "CleanPower" } },
@@ -470,12 +473,46 @@ namespace BWLArchipelago
             foreach (string techName in toGrant)
                 GrantTechnology(techName);
 
-            // Flush pending resource grants
             FlushPendingResourceGrants();
-
-            // Re-evaluate buildings after all grants are applied so buildings
-            // unlocked by AP grants are available after loading a save
             RefreshAvailableBuildings();
+            RefreshBuildingUI();
+        }
+
+        private static void RefreshBuildingUI()
+        {
+            try
+            {
+                Type gameControllerType = AccessTools.TypeByName("GameController");
+                MethodInfo getSinglePlayerView = AccessTools.Method(
+                    gameControllerType, "GetSinglePlayerView"
+                );
+                object playerView = getSinglePlayerView?.Invoke(null, null);
+                if (playerView == null) return;
+
+                PropertyInfo cardControllerProp = AccessTools.Property(
+                    playerView.GetType(), "CardController"
+                );
+                object cardController = cardControllerProp?.GetValue(playerView, null);
+                if (cardController == null) return;
+
+                MethodInfo evalButtons = AccessTools.Method(
+                    cardController.GetType(), "EvaluateBuildingButtons"
+                );
+                MethodInfo evalCards = AccessTools.Method(
+                    cardController.GetType(),
+                    "EvaluateAvailableBuildingCards",
+                    new Type[] { typeof(bool) }
+                );
+
+                evalButtons?.Invoke(cardController, null);
+                evalCards?.Invoke(cardController, new object[] { false });
+
+                Log.LogInfo("Building UI refreshed.");
+            }
+            catch (Exception ex)
+            {
+                Log.LogError("Error refreshing building UI: " + ex.Message);
+            }
         }
 
         private static void FlushPendingResourceGrants()
@@ -672,6 +709,13 @@ namespace BWLArchipelago
             }
 
             grantedTechnologies.Add(techName);
+
+            MethodInfo revealTechnology = AccessTools.Method(
+                player.GetType(),
+                "RevealTechnology",
+                new Type[] { technologyType }
+            );
+            revealTechnology?.Invoke(player, new object[] { techDef });
 
             IsGrantingTechnology = true;
             addResearched.Invoke(player, new object[] { techDef, null, false });

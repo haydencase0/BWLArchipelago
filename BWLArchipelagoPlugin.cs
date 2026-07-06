@@ -3,10 +3,11 @@ using BepInEx.Configuration;
 using BepInEx.Logging;
 using HarmonyLib;
 using System;
+using System.Numerics;
 using System.Reflection;
+using TMPro;
 using UnityEngine;
 using UnityEngine.UI;
-using TMPro;
 
 namespace BWLArchipelago
 {
@@ -334,12 +335,38 @@ namespace BWLArchipelago
             {
                 harmony.Patch(
                     updateInternalTarget,
+                    prefix: new HarmonyMethod(
+                        typeof(TechnologyButtonUpdatePatch),
+                        nameof(TechnologyButtonUpdatePatch.Prefix)
+                    ),
                     postfix: new HarmonyMethod(
                         typeof(TechnologyButtonUpdatePatch),
                         nameof(TechnologyButtonUpdatePatch.Postfix)
                     )
                 );
                 Log.LogInfo("Patch applied: TechnologyButton.Update_Internal.");
+            }
+
+            MethodInfo initialiseTarget = AccessTools.Method(
+                typeof(TechnologyButton),
+                "Initialise",
+                new Type[] { typeof(GameView), typeof(Entity), typeof(TechnologyDefinition), typeof(bool) }
+            );
+
+            if (initialiseTarget != null)
+            {
+                harmony.Patch(
+                    initialiseTarget,
+                    prefix: new HarmonyMethod(
+                        typeof(TechnologyButtonInitialisePatch),
+                        nameof(TechnologyButtonInitialisePatch.Prefix)
+                    ),
+                    postfix: new HarmonyMethod(
+                        typeof(TechnologyButtonInitialisePatch),
+                        nameof(TechnologyButtonInitialisePatch.Postfix)
+                    )
+                );
+                Log.LogInfo("Patch applied: TechnologyButton.Initialise.");
             }
 
             // --- Patch 13: TechnologyDetails.Update_Internal ---
@@ -355,12 +382,35 @@ namespace BWLArchipelago
             {
                 harmony.Patch(
                     detailsUpdateTarget,
+                    prefix: new HarmonyMethod(
+                        typeof(TechnologyDetailsUpdatePatch),
+                        nameof(TechnologyDetailsUpdatePatch.Prefix)
+                    )
+                );
+                harmony.Patch(
+                    detailsUpdateTarget,
                     postfix: new HarmonyMethod(
                         typeof(TechnologyDetailsUpdatePatch),
                         nameof(TechnologyDetailsUpdatePatch.Postfix)
                     )
                 );
                 Log.LogInfo("Patch applied: TechnologyDetails.Update_Internal.");
+            }
+
+            MethodInfo showDetailsTarget = AccessTools.Method(
+                AccessTools.TypeByName("TechnologyController"), "ShowTechnologyDetails"
+            );
+
+            if (showDetailsTarget != null)
+            {
+                harmony.Patch(
+                    showDetailsTarget,
+                    postfix: new HarmonyMethod(
+                        typeof(ShowTechnologyDetailsPatch),
+                        nameof(ShowTechnologyDetailsPatch.Postfix)
+                    )
+                );
+                Log.LogInfo("Patch applied: TechnologyController.ShowTechnologyDetails.");
             }
 
             // --- Patch 14: ReadyToStartGame ---
@@ -439,6 +489,34 @@ namespace BWLArchipelago
                 Log.LogInfo("Patch applied: GameManager.SaveToDiskThread.ThreadProc.");
             }
 
+            try
+            {
+                Type cardControllerType2 = AccessTools.TypeByName("GameCardController");
+                MethodInfo buildModeTarget = cardControllerType2 != null
+                    ? AccessTools.Method(
+                        cardControllerType2,
+                        "BuildMode",
+                        new Type[] { typeof(int), AccessTools.TypeByName("BuildModeChangeReason") }
+                    )
+                    : null;
+
+                if (buildModeTarget != null)
+                {
+                    harmony.Patch(
+                        buildModeTarget,
+                        prefix: new HarmonyMethod(
+                            typeof(BuildModePatch),
+                            nameof(BuildModePatch.Prefix)
+                        )
+                    );
+                    Log.LogInfo("Patch applied: GameCardController.BuildMode.");
+                }
+            }
+            catch (Exception ex)
+            {
+                Log.LogError("Exception patching BuildMode: " + ex.Message);
+            }
+
             // --- Patch 18: GameController.PostLoad ---
             // Restores our Archipelago state when a save is loaded,
             // before ReadyToStartGame fires.
@@ -456,6 +534,25 @@ namespace BWLArchipelago
                     )
                 );
                 Log.LogInfo("Patch applied: GameController.PostLoad.");
+            }
+            MethodInfo clickedTarget = AccessTools.Method(
+                typeof(TechnologyButton), "Clicked"
+            );
+
+            if (clickedTarget != null)
+            {
+                harmony.Patch(
+                    clickedTarget,
+                    prefix: new HarmonyMethod(
+                        typeof(TechnologyButtonClickedPatch),
+                        nameof(TechnologyButtonClickedPatch.Prefix)
+                    ),
+                    finalizer: new HarmonyMethod(
+                        typeof(TechnologyButtonClickedPatch),
+                        nameof(TechnologyButtonClickedPatch.Finalizer)
+                    )
+                );
+                Log.LogInfo("Patch applied: TechnologyButton.Clicked.");
             }
 
             // Create the connection UI - defined in ArchipelagoConnectionUI.cs
@@ -536,6 +633,7 @@ namespace BWLArchipelago
             if (ArchipelagoManager.IsGrantingTechnology) return;
 
             ArchipelagoManager.IsCompletingPlayerCheck = true;
+            ArchipelagoManager.IsBlockingGrantedTechLookup = true;
         }
 
         public static void Postfix(
@@ -604,16 +702,17 @@ namespace BWLArchipelago
             if (ArchipelagoManager.IsCompletingPlayerCheck)
                 return false;
 
+            ArchipelagoManager.IsEvaluatingBuildings = true;
             ArchipelagoManager.AddGrantedTechsToResearched();
             return true;
         }
 
         public static void Postfix()
         {
-            if (ArchipelagoManager.IsCompletingPlayerCheck)
-                return;
+            if (ArchipelagoManager.IsCompletingPlayerCheck) return;
 
             ArchipelagoManager.RemoveGrantedTechsFromResearched();
+            ArchipelagoManager.IsEvaluatingBuildings = false;
         }
     }
 
@@ -770,155 +869,240 @@ namespace BWLArchipelago
             object technology,
             ref bool __result)
         {
-            if (technology == null)
-                return true;
-
-            if (!ArchipelagoManager.IsCheckingResearchValidity)
-                return true;
-
-            string techName = AddResearchedTechnologyPatch.GetName(technology);
-            if (techName == null || techName == "<null>")
-                return true;
-
-            if (techName == ArchipelagoManager.CurrentlyValidatingTech)
-                return true;
-
-            if (ArchipelagoManager.IsTechnologyResearched(techName) ||
-                ArchipelagoManager.IsTechnologyGranted(techName))
+            try
             {
-                __result = true;
-                return false;
-            }
+                if (technology == null)
+                    return true;
 
-            return true;
+                string techName = AddResearchedTechnologyPatch.GetName(technology);
+                if (techName == null || techName == "<null>")
+                    return true;
+
+                if (ArchipelagoManager.IsEvaluatingBuildings)
+                {
+                    if (ArchipelagoManager.IsTechnologyGranted(techName))
+                    {
+                        __result = true;
+                        return false;
+                    }
+                    return true;
+                }
+
+                if (ArchipelagoManager.IsUpdatingTechTreeUI)
+                {
+                    if (ArchipelagoManager.IsTechnologyResearched(techName))
+                    {
+                        __result = true;
+                        return false;
+                    }
+                    __result = false;
+                    return false;
+                }
+
+                if (ArchipelagoManager.IsCheckingResearchValidity &&
+                    techName == ArchipelagoManager.CurrentlyValidatingTech)
+                {
+                    return true;
+                }
+
+                if (ArchipelagoManager.IsTechnologyResearched(techName) ||
+                    ArchipelagoManager.IsTechnologyGranted(techName))
+                {
+                    __result = true;
+                    return false;
+                }
+            
+                return true;
+            }
+            catch (Exception ex)
+            {
+                BWLArchipelagoPlugin.Log.LogError(
+                    "EXCEPTION in HasResearchedTechnologyPatch.Prefix: " + ex.Message +
+                    "\n" + ex.StackTrace
+                );
+                return true;
+            }
         }
     }
 
     // Patch 12: Shows checkmark for player-checked techs in the tech tree.
+    // Includes temporary diagnostic logging for Gardening to debug why
+    // AP-granted-but-unresearched techs aren't clickable.
     public static class TechnologyButtonUpdatePatch
     {
+        public static void Prefix()
+        {
+            ArchipelagoManager.IsUpdatingTechTreeUI = true;
+        }
+
         public static void Postfix(object __instance)
         {
-            FieldInfo techField = AccessTools.Field(__instance.GetType(), "technology");
-            object technology = techField?.GetValue(__instance);
-            if (technology == null) return;
+            ArchipelagoManager.IsUpdatingTechTreeUI = false;
 
-            string techName = AddResearchedTechnologyPatch.GetName(technology);
-            if (techName == null || techName == "<null>") return;
+            try
+            {
+                FieldInfo techField = AccessTools.Field(__instance.GetType(), "technology");
+                object technology = techField?.GetValue(__instance);
+                if (technology == null) return;
 
-            if (!ArchipelagoManager.IsTechnologyResearched(techName)) return;
+                string techName = AddResearchedTechnologyPatch.GetName(technology);
+                if (techName == null || techName == "<null>") return;
 
-            FieldInfo doneField = AccessTools.Field(__instance.GetType(), "Done");
-            FieldInfo zoomedDoneField = AccessTools.Field(__instance.GetType(), "ZoomedDone");
-            FieldInfo backgroundField = AccessTools.Field(__instance.GetType(), "Background");
-            FieldInfo completeBgField = AccessTools.Field(__instance.GetType(), "CompleteBackground");
-            FieldInfo doneIconField = AccessTools.Field(__instance.GetType(), "DoneIcon");
-            FieldInfo iconField = AccessTools.Field(__instance.GetType(), "Icon");
-            FieldInfo requirementsField = AccessTools.Field(__instance.GetType(), "requirements");
-            FieldInfo timerBgField = AccessTools.Field(__instance.GetType(), "TimerBackground");
-            FieldInfo zoomedTimerBgField = AccessTools.Field(__instance.GetType(), "ZoomedTimerBackground");
-            FieldInfo buttonField = AccessTools.Field(__instance.GetType(), "button");
-            FieldInfo colourBorderField = AccessTools.Field(__instance.GetType(), "ColourBorder");
-            FieldInfo colourBorderZoomedField = AccessTools.Field(__instance.GetType(), "ColourBorderZoomed");
+                if (!ArchipelagoManager.IsTechnologyResearched(techName)) return;
 
-            object done = doneField?.GetValue(__instance);
-            object zoomedDone = zoomedDoneField?.GetValue(__instance);
-            object background = backgroundField?.GetValue(__instance);
-            object completeBg = completeBgField?.GetValue(__instance);
-            object doneIcon = doneIconField?.GetValue(__instance);
-            object icon = iconField?.GetValue(__instance);
-            object requirements = requirementsField?.GetValue(__instance);
-            object timerBg = timerBgField?.GetValue(__instance);
-            object zoomedTimerBg = zoomedTimerBgField?.GetValue(__instance);
-            object button = buttonField?.GetValue(__instance);
-            object colourBorder = colourBorderField?.GetValue(__instance);
-            object colourBorderZoomed = colourBorderZoomedField?.GetValue(__instance);
+                FieldInfo doneField = AccessTools.Field(__instance.GetType(), "Done");
+                FieldInfo zoomedDoneField = AccessTools.Field(__instance.GetType(), "ZoomedDone");
+                FieldInfo backgroundField = AccessTools.Field(__instance.GetType(), "Background");
+                FieldInfo completeBgField = AccessTools.Field(__instance.GetType(), "CompleteBackground");
+                FieldInfo doneIconField = AccessTools.Field(__instance.GetType(), "DoneIcon");
+                FieldInfo iconField = AccessTools.Field(__instance.GetType(), "Icon");
+                FieldInfo requirementsField = AccessTools.Field(__instance.GetType(), "requirements");
+                FieldInfo timerBgField = AccessTools.Field(__instance.GetType(), "TimerBackground");
+                FieldInfo zoomedTimerBgField = AccessTools.Field(__instance.GetType(), "ZoomedTimerBackground");
+                FieldInfo buttonField2 = AccessTools.Field(__instance.GetType(), "button");
+                FieldInfo colourBorderField = AccessTools.Field(__instance.GetType(), "ColourBorder");
+                FieldInfo colourBorderZoomedField = AccessTools.Field(__instance.GetType(), "ColourBorderZoomed");
 
-            if (done is GameObject doneGo) doneGo.SetActive(true);
-            if (zoomedDone is GameObject zDoneGo) zDoneGo.SetActive(true);
-            if (doneIcon is Image doneImg) doneImg.gameObject.SetActive(true);
-            if (icon is Image iconImg) iconImg.gameObject.SetActive(false);
-            if (requirements is GameObject reqGo) reqGo.SetActive(false);
-            if (timerBg is GameObject timerGo) timerGo.SetActive(false);
-            if (zoomedTimerBg is GameObject zTimerGo) zTimerGo.SetActive(false);
-            if (background is Image bgImg && completeBg is Sprite completeSpr)
-                bgImg.sprite = completeSpr;
-            if (button is Button btn) btn.interactable = true;
-            if (colourBorder is Image cb) cb.gameObject.SetActive(false);
-            if (colourBorderZoomed is Image cbz) cbz.gameObject.SetActive(false);
+                object done = doneField?.GetValue(__instance);
+                object zoomedDone = zoomedDoneField?.GetValue(__instance);
+                object background = backgroundField?.GetValue(__instance);
+                object completeBg = completeBgField?.GetValue(__instance);
+                object doneIcon = doneIconField?.GetValue(__instance);
+                object icon = iconField?.GetValue(__instance);
+                object requirements = requirementsField?.GetValue(__instance);
+                object timerBg = timerBgField?.GetValue(__instance);
+                object zoomedTimerBg = zoomedTimerBgField?.GetValue(__instance);
+                object button = buttonField2?.GetValue(__instance);
+                object colourBorder = colourBorderField?.GetValue(__instance);
+                object colourBorderZoomed = colourBorderZoomedField?.GetValue(__instance);
+
+                if (done is GameObject doneGo) doneGo.SetActive(true);
+                if (zoomedDone is GameObject zDoneGo) zDoneGo.SetActive(true);
+                if (doneIcon is Image doneImg) doneImg.gameObject.SetActive(true);
+                if (icon is Image iconImg) iconImg.gameObject.SetActive(false);
+                if (requirements is GameObject reqGo) reqGo.SetActive(false);
+                if (timerBg is GameObject timerGo) timerGo.SetActive(false);
+                if (zoomedTimerBg is GameObject zTimerGo) zTimerGo.SetActive(false);
+                if (background is Image bgImg && completeBg is Sprite completeSpr)
+                    bgImg.sprite = completeSpr;
+                if (button is Button btn2) btn2.interactable = true;
+                if (colourBorder is Image cb) cb.gameObject.SetActive(false);
+                if (colourBorderZoomed is Image cbz) cbz.gameObject.SetActive(false);
+            }
+            catch (Exception ex)
+            {
+                BWLArchipelagoPlugin.Log.LogError(
+                    "Exception in TechnologyButtonUpdatePatch.Postfix: " + ex.Message
+                );
+            }
         }
     }
 
     // Patch 13: For AP-granted items not yet player-checked, shows Research button.
     public static class TechnologyDetailsUpdatePatch
     {
+        public static void Prefix()
+        {
+            ArchipelagoManager.IsUpdatingTechTreeUI = true;
+        }
         public static void Postfix(object __instance)
         {
-            FieldInfo techField = AccessTools.Field(__instance.GetType(), "technology");
-            object technology = techField?.GetValue(__instance);
-            if (technology == null) return;
+            ArchipelagoManager.IsUpdatingTechTreeUI = false;
 
-            string techName = AddResearchedTechnologyPatch.GetName(technology);
-            if (techName == null || techName == "<null>") return;
-
-            bool isPlayerChecked = ArchipelagoManager.IsTechnologyResearched(techName);
-            bool isAPGranted = ArchipelagoManager.IsTechnologyGranted(techName);
-
-            if (!isAPGranted || isPlayerChecked) return;
-
-            FieldInfo doneField = AccessTools.Field(__instance.GetType(), "Done");
-            FieldInfo researchButtonField = AccessTools.Field(__instance.GetType(), "ResearchButton");
-            FieldInfo researchButtonTextField = AccessTools.Field(__instance.GetType(), "ResearchButtonText");
-            FieldInfo requirementsField = AccessTools.Field(__instance.GetType(), "requirements");
-            FieldInfo timeDisplayField = AccessTools.Field(__instance.GetType(), "TimeDisplay");
-            FieldInfo infoBackgroundField = AccessTools.Field(__instance.GetType(), "InfoBackground");
-            FieldInfo viewField = AccessTools.Field(__instance.GetType(), "view");
-            FieldInfo libraryField = AccessTools.Field(__instance.GetType(), "library");
-
-            object done = doneField?.GetValue(__instance);
-            object researchButton = researchButtonField?.GetValue(__instance);
-            object researchButtonText = researchButtonTextField?.GetValue(__instance);
-            object requirements = requirementsField?.GetValue(__instance);
-            object timeDisplay = timeDisplayField?.GetValue(__instance);
-            object infoBackground = infoBackgroundField?.GetValue(__instance);
-            object view = viewField?.GetValue(__instance);
-            object library = libraryField?.GetValue(__instance);
-
-            if (done is GameObject doneGo) doneGo.SetActive(false);
-            if (requirements is GameObject reqGo) reqGo.SetActive(true);
-            if (timeDisplay is GameObject timeGo) timeGo.SetActive(true);
-            if (infoBackground is GameObject infoBgGo) infoBgGo.SetActive(true);
-
-            PropertyInfo gameObjectProp = researchButton?.GetType().GetProperty("gameObject");
-            object researchButtonGo = gameObjectProp?.GetValue(researchButton, null);
-            if (researchButtonGo is GameObject rbGo) rbGo.SetActive(true);
-
-            if (researchButtonText is TextMeshProUGUI rbText)
-                rbText.text = GameController.GetTranslation("UI/Research");
-
-            if (view != null && library is Entity libraryEntity)
+            try
             {
-                PropertyInfo playerProp = AccessTools.Property(view.GetType(), "Player");
-                object player = playerProp?.GetValue(view, null);
+                FieldInfo techField = AccessTools.Field(__instance.GetType(), "technology");
+                object technology = techField?.GetValue(__instance);
+                if (technology == null) return;
 
-                if (player != null && technology is TechnologyDefinition techDef)
-                {
-                    PropertyInfo playerIdProp = AccessTools.Property(
-                        player.GetType(), "PlayerId"
-                    );
-                    object playerId = playerIdProp?.GetValue(player, null);
+                string techName = AddResearchedTechnologyPatch.GetName(technology);
+                if (techName == null || techName == "<null>") return;
 
-                    string errorReason;
-                    bool isValid = StartResearchAction.IsValid(
-                        (short)(int)playerId, libraryEntity, techDef, "", 0, out errorReason
-                    );
+                bool isPlayerChecked = ArchipelagoManager.IsTechnologyResearched(techName);
+                bool isAPGranted = ArchipelagoManager.IsTechnologyGranted(techName);
 
-                    PropertyInfo buttonProp = AccessTools.Property(
-                        researchButton.GetType(), "Button"
-                    );
-                    object btn = buttonProp?.GetValue(researchButton, null);
-                    if (btn is Button b) b.interactable = isValid;
-                }
+                if (!isAPGranted || isPlayerChecked) return;
+
+                FieldInfo doneField = AccessTools.Field(__instance.GetType(), "Done");
+                FieldInfo researchButtonField = AccessTools.Field(__instance.GetType(), "ResearchButton");
+                FieldInfo researchButtonTextField = AccessTools.Field(__instance.GetType(), "ResearchButtonText");
+                FieldInfo requirementsField = AccessTools.Field(__instance.GetType(), "requirements");
+                FieldInfo timeDisplayField = AccessTools.Field(__instance.GetType(), "TimeDisplay");
+                FieldInfo infoBackgroundField = AccessTools.Field(__instance.GetType(), "InfoBackground");
+                FieldInfo viewField = AccessTools.Field(__instance.GetType(), "view");
+                FieldInfo libraryField = AccessTools.Field(__instance.GetType(), "library");
+
+                object done = doneField?.GetValue(__instance);
+                object researchButton = researchButtonField?.GetValue(__instance);
+                object researchButtonText = researchButtonTextField?.GetValue(__instance);
+                object requirements = requirementsField?.GetValue(__instance);
+                object timeDisplay = timeDisplayField?.GetValue(__instance);
+                object infoBackground = infoBackgroundField?.GetValue(__instance);
+
+                if (done is GameObject doneGo) doneGo.SetActive(false);
+                if (requirements is GameObject reqGo) reqGo.SetActive(true);
+                if (timeDisplay is GameObject timeGo) timeGo.SetActive(true);
+                if (infoBackground is GameObject infoBgGo) infoBgGo.SetActive(true);
+
+                PropertyInfo gameObjectProp = researchButton?.GetType().GetProperty("gameObject");
+                object researchButtonGo = gameObjectProp?.GetValue(researchButton, null);
+                if (researchButtonGo is GameObject rbGo) rbGo.SetActive(true);
+
+                if (researchButtonText is TextMeshProUGUI rbText)
+                    rbText.text = GameController.GetTranslation("UI/Research");
+            }
+            catch (Exception ex)
+            {
+                BWLArchipelagoPlugin.Log.LogError(
+                    "Exception in TechnologyDetailsUpdatePatch.Postfix: " + ex.Message
+                );
+            }
+        }
+    }
+
+    public static class TechnologyButtonInitialisePatch
+    {
+        public static void Prefix()
+        {
+            ArchipelagoManager.IsUpdatingTechTreeUI = true;
+        }
+
+        public static void Postfix()
+        {
+            ArchipelagoManager.IsUpdatingTechTreeUI = false;
+        }
+    }
+
+    public static class ShowTechnologyDetailsPatch
+    {
+        public static void Postfix(object __instance, TechnologyDefinition technology)
+        {
+            if (technology?.Name != "Gardening") return;
+
+            FieldInfo detailsField = AccessTools.Field(
+                __instance.GetType(), "technologyDetails"
+            );
+            object details = detailsField?.GetValue(__instance);
+
+            if (details == null)
+            {
+                BWLArchipelagoPlugin.Log.LogInfo(
+                    "ShowTechnologyDetails postfix - technologyDetails is NULL after call."
+                );
+                return;
+            }
+
+            if (details is Component comp)
+            {
+                GameObject go = comp.gameObject;
+                BWLArchipelagoPlugin.Log.LogInfo(
+                    "ShowTechnologyDetails postfix - GameObject created: " + go.name +
+                    " | activeSelf: " + go.activeSelf +
+                    " | activeInHierarchy: " + go.activeInHierarchy +
+                    " | position: " + (go.transform as RectTransform)?.anchoredPosition +
+                    " | parent: " + (go.transform.parent?.name ?? "null") +
+                    " | parent active: " + (go.transform.parent?.gameObject.activeInHierarchy.ToString() ?? "n/a")
+                );
             }
         }
     }
@@ -997,6 +1181,50 @@ namespace BWLArchipelago
         public static void Postfix()
         {
             ArchipelagoManager.SaveArchipelagoState();
+        }
+    }
+    public static class BuildModePatch
+    {
+        public static bool Prefix()
+        {
+            return !ArchipelagoManager.IsCompletingPlayerCheck;
+        }
+    }
+
+    public static class TechnologyButtonClickedPatch
+    {
+        public static void Prefix(object __instance)
+        {
+            FieldInfo techField = AccessTools.Field(__instance.GetType(), "technology");
+            object technology = techField?.GetValue(__instance);
+            string techName = AddResearchedTechnologyPatch.GetName(technology);
+
+            BWLArchipelagoPlugin.Log.LogInfo(
+                "TechnologyButton.Clicked() CALLED for: " + techName
+            );
+        }
+        public static Exception Finalizer(object __instance, Exception __exception)
+        {
+            FieldInfo techField = AccessTools.Field(__instance.GetType(), "technology");
+            object technology = techField?.GetValue(__instance);
+            string techName = AddResearchedTechnologyPatch.GetName(technology);
+
+            if (__exception != null)
+            {
+                BWLArchipelagoPlugin.Log.LogError(
+                    "TechnologyButton.Clicked() THREW for: " + techName +
+                    " | Exception: " + __exception.Message +
+                    "\n" + __exception.StackTrace
+                );
+            }
+            else
+            {
+                BWLArchipelagoPlugin.Log.LogInfo(
+                    "TechnologyButton.Clicked() COMPLETED for: " + techName
+                );
+            }
+
+            return null; // returning null suppresses the exception
         }
     }
 

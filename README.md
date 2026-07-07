@@ -97,7 +97,7 @@ The following technologies are grouped into progressive chains. You must receive
 
 | Group | Technologies (in order) |
 |-------|------------------------|
-| Progressive Housing | House → School → Apartment |
+| Progressive Housing | School → House → Apartment |
 | Progressive Mining | Mining → Metalwork → Glass → Laser |
 | Progressive Elevator | Elevator → SpaceElevator |
 | Progressive Power | Repair → Power → OilPower → CleanPower |
